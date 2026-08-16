@@ -6,9 +6,17 @@ const multer = require("multer");
 const UPLOAD_ROOT = path.join(__dirname, "..", "..", "uploads");
 
 const DOCUMENT_EXTENSIONS = new Set([
-  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
-  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic", ".heif",
+  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pages", ".numbers", ".keynote",
   ".txt", ".csv", ".zip",
+  ".mp4", ".mov", ".m4v",
+  // Common text/code/config files — safe to store since nothing uploaded
+  // here is ever executed server-side, only stored and served back for
+  // download. Genuinely executable formats (.exe, .sh, .bat, .msi, .apk,
+  // .dll, .jar, etc.) stay deliberately excluded — this list is for
+  // reference material someone might reasonably attach, not for running.
+  ".js", ".jsx", ".ts", ".tsx", ".json", ".py", ".html", ".css",
+  ".md", ".xml", ".yml", ".yaml", ".sql", ".log",
 ]);
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
