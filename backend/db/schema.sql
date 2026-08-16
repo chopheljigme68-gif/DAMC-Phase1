@@ -566,3 +566,20 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS lead_id UUID REFERENCES users(id) 
 -- a guess. The roadmap falls back to created_at when this is absent — new
 -- projects can set a real one going forward for a more accurate timeline.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS start_date DATE;
+
+/* ---------------- activity log attachments — files attached to a day's entry ---------------- */
+-- Time and links live inline in each text block's own JSON (content is
+-- already flexible JSONB, no migration needed for those) — but real files
+-- need actual storage, so they get their own table, same pattern as every
+-- other attachment table in this schema.
+CREATE TABLE IF NOT EXISTS activity_log_attachments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  activity_log_id UUID NOT NULL REFERENCES activity_logs(id) ON DELETE CASCADE,
+  uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  file_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  storage_path TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_activity_log_attachments_log ON activity_log_attachments(activity_log_id);

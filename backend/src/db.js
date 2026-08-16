@@ -1047,6 +1047,63 @@ async function upsertActivityLog({ userId, workspaceId, entryDate, content }) {
   return rows[0];
 }
 
+async function getActivityLogById(id) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", workspace_id AS "workspaceId", to_char(entry_date, 'YYYY-MM-DD') AS "entryDate"
+     FROM activity_logs WHERE id = $1`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
+async function getActivityLogByDate(userId, workspaceId, entryDate) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", workspace_id AS "workspaceId", to_char(entry_date, 'YYYY-MM-DD') AS "entryDate"
+     FROM activity_logs WHERE user_id = $1 AND workspace_id = $2 AND entry_date = $3`,
+    [userId, workspaceId, entryDate]
+  );
+  return rows[0] || null;
+}
+
+const ACTIVITY_ATTACHMENT_SELECT = `
+  SELECT a.id, a.activity_log_id AS "activityLogId", a.uploaded_by AS "uploadedBy", a.file_name AS "fileName",
+         a.mime_type AS "mimeType", a.size_bytes AS "sizeBytes", a.created_at AS "createdAt",
+         u.name AS "uploaderName"
+  FROM activity_log_attachments a LEFT JOIN users u ON u.id = a.uploaded_by
+`;
+
+async function getAttachmentsForActivityLog(activityLogId) {
+  const { rows } = await pool.query(`${ACTIVITY_ATTACHMENT_SELECT} WHERE a.activity_log_id = $1 ORDER BY a.created_at ASC`, [activityLogId]);
+  return rows;
+}
+
+async function getActivityLogAttachmentById(id) {
+  const { rows } = await pool.query(
+    `SELECT id, activity_log_id AS "activityLogId", uploaded_by AS "uploadedBy", file_name AS "fileName",
+            mime_type AS "mimeType", size_bytes AS "sizeBytes", storage_path AS "storagePath", created_at AS "createdAt"
+     FROM activity_log_attachments WHERE id = $1`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
+async function addActivityLogAttachment({ activityLogId, uploadedBy, fileName, mimeType, sizeBytes, storagePath }) {
+  const { rows } = await pool.query(
+    `INSERT INTO activity_log_attachments (activity_log_id, uploaded_by, file_name, mime_type, size_bytes, storage_path)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [activityLogId, uploadedBy, fileName, mimeType, sizeBytes, storagePath]
+  );
+  const list = await getAttachmentsForActivityLog(activityLogId);
+  return list.find((a) => a.id === rows[0].id);
+}
+
+async function deleteActivityLogAttachment(id) {
+  const a = await getActivityLogAttachmentById(id);
+  if (!a) return null;
+  await pool.query("DELETE FROM activity_log_attachments WHERE id = $1", [id]);
+  return a;
+}
+
 /* ==================== profile ==================== */
 
 async function updateUserProfile(userId, { name }) {
@@ -1075,7 +1132,8 @@ module.exports = {
   getLinksForProject, addProjectLink, getProjectLinkById, deleteProjectLink,
   getDocumentsForProject, getDocumentById, addDocument, deleteDocument,
   getHolidays, addHoliday, deleteHoliday, getHolidayById,
-  getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog,
+  getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog, getActivityLogById, getActivityLogByDate,
+  getAttachmentsForActivityLog, getActivityLogAttachmentById, addActivityLogAttachment, deleteActivityLogAttachment,
   getTasksDueInTwoDays, markDueReminderSent,
   getNotificationsForUser, createNotification, markNotificationRead, markAllRead,
 };

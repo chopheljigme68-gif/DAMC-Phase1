@@ -46,7 +46,12 @@ function parseClockTime(raw) {
 // including right after creating it — a narrow, permanent "you made it, you
 // can attach to it" right, distinct from general task editing (which stays
 // manager-only regardless of who created the task).
-const canTouchTask = (req, task) => isManager(req) || (task && task.createdBy === req.user.id);
+// Managers can touch any task's files/links. The person who created a task
+// keeps that right permanently (see the round this was added). Now also
+// extended to the task's current assignee — it's your work, you should be
+// able to attach to it — but NOT to a past assignee if it's been reassigned
+// since (task.assigneeId always reflects who owns it right now).
+const canTouchTask = (req, task) => isManager(req) || (task && (task.createdBy === req.user.id || task.assigneeId === req.user.id));
 
 async function assertBelongsToProject(taskId, projectId) {
   const task = await getTaskById(taskId);
@@ -162,10 +167,17 @@ router.patch("/:id", async (req, res, next) => {
     const existing = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!existing) return res.status(404).json({ error: "Task not found" });
 
-    // Members are view + comment only now — editing a task in any way,
-    // including its own status, is admin/lead/project-lead territory.
-    if (!isManager(req)) {
-      return res.status(403).json({ error: "Only the workspace admin, team lead, or this project's lead can update tasks" });
+    // Members get real editing rights on their OWN assigned task — anything
+    // else (someone else's task) stays view + comment only. Reassignment is
+    // deliberately excluded even on your own task — handing work to someone
+    // else is a management decision, not a "edit my own task" one.
+    const manager = isManager(req);
+    const isOwnTask = existing.assigneeId === req.user.id;
+    if (!manager && !isOwnTask) {
+      return res.status(403).json({ error: "You can only edit tasks assigned to you" });
+    }
+    if (!manager && req.body.assigneeId !== undefined && req.body.assigneeId !== existing.assigneeId) {
+      return res.status(403).json({ error: "Only the workspace admin, team lead, or this project's lead can reassign a task" });
     }
 
     const patch = {};
@@ -211,8 +223,8 @@ router.put("/:id/subtasks", async (req, res, next) => {
     const existing = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!existing) return res.status(404).json({ error: "Task not found" });
 
-    if (!isManager(req)) {
-      return res.status(403).json({ error: "Only the workspace admin, team lead, or this project's lead can update the checklist" });
+    if (!isManager(req) && existing.assigneeId !== req.user.id) {
+      return res.status(403).json({ error: "You can only update the checklist on tasks assigned to you" });
     }
 
     const task = await replaceSubtasks(req.params.id, subtasks);
@@ -257,7 +269,7 @@ router.post("/:id/attachments", (req, res, next) => {
     }
     if (!canTouchTask(req, task)) {
       if (req.file) fs.unlink(req.file.path, () => {});
-      return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, or the task's creator can add files" });
+      return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, the task's creator, or its current assignee can add files" });
     }
     if (!req.file) return res.status(400).json({ error: "No file was uploaded" });
 
@@ -302,7 +314,7 @@ router.delete("/:id/attachments/:attachmentId", async (req, res, next) => {
   try {
     const task = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!task) return res.status(404).json({ error: "Task not found" });
-    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, or the task's creator can remove files" });
+    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, the task's creator, or its current assignee can remove files" });
 
     const attachment = await deleteAttachment(req.params.attachmentId);
     if (attachment && attachment.taskId === req.params.id && fs.existsSync(attachment.storagePath)) {
@@ -374,7 +386,7 @@ router.post("/:id/links", async (req, res, next) => {
 
     const task = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!task) return res.status(404).json({ error: "Task not found" });
-    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, or the task's creator can add links" });
+    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, the task's creator, or its current assignee can add links" });
 
     const link = await addLink({
       taskId: req.params.id, addedBy: req.user.id,
@@ -397,7 +409,7 @@ router.delete("/:id/links/:linkId", async (req, res, next) => {
   try {
     const task = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!task) return res.status(404).json({ error: "Task not found" });
-    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, or the task's creator can remove links" });
+    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, the task's creator, or its current assignee can remove links" });
 
     const link = await getLinkById(req.params.linkId);
     if (!link || link.taskId !== req.params.id) return res.status(404).json({ error: "Link not found" });
@@ -442,7 +454,7 @@ router.post("/:id/subtasks/:subtaskId/attachments", (req, res, next) => {
     }
     if (!canTouchTask(req, task)) {
       if (req.file) fs.unlink(req.file.path, () => {});
-      return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, or the task's creator can add files" });
+      return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, the task's creator, or its current assignee can add files" });
     }
     const sub = await assertSubtaskBelongsToTask(req.params.subtaskId, req.params.id);
     if (!sub) {
@@ -482,7 +494,7 @@ router.delete("/:id/subtasks/:subtaskId/attachments/:attachmentId", async (req, 
   try {
     const task = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!task) return res.status(404).json({ error: "Task not found" });
-    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, or the task's creator can remove files" });
+    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, the task's creator, or its current assignee can remove files" });
     const sub = await assertSubtaskBelongsToTask(req.params.subtaskId, req.params.id);
     if (!sub) return res.status(404).json({ error: "Subtask not found" });
 
@@ -516,7 +528,7 @@ router.post("/:id/subtasks/:subtaskId/links", async (req, res, next) => {
 
     const task = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!task) return res.status(404).json({ error: "Task not found" });
-    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, or the task's creator can add links" });
+    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, the task's creator, or its current assignee can add links" });
     const sub = await assertSubtaskBelongsToTask(req.params.subtaskId, req.params.id);
     if (!sub) return res.status(404).json({ error: "Subtask not found" });
 
@@ -530,7 +542,7 @@ router.delete("/:id/subtasks/:subtaskId/links/:linkId", async (req, res, next) =
   try {
     const task = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!task) return res.status(404).json({ error: "Task not found" });
-    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, or the task's creator can remove links" });
+    if (!canTouchTask(req, task)) return res.status(403).json({ error: "Only the workspace admin, team lead, this project's lead, the task's creator, or its current assignee can remove links" });
     const sub = await assertSubtaskBelongsToTask(req.params.subtaskId, req.params.id);
     if (!sub) return res.status(404).json({ error: "Subtask not found" });
 

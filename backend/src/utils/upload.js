@@ -72,4 +72,11 @@ const milestoneUpload = makeUploader({
   maxBytes: 20 * 1024 * 1024,
 });
 
-module.exports = { UPLOAD_ROOT, taskUpload, subtaskUpload, projectUpload, avatarUpload, milestoneUpload };
+// Activity log attachments: uploads/activity-log/<workspaceId>/<userId>/<entryDate>/<uuid>.ext
+const activityLogUpload = makeUploader({
+  destinationFn: (req) => path.join(UPLOAD_ROOT, "activity-log", req.params.workspaceId, req.user.id, req.params.date),
+  allowedExtensions: DOCUMENT_EXTENSIONS,
+  maxBytes: 20 * 1024 * 1024,
+});
+
+module.exports = { UPLOAD_ROOT, taskUpload, subtaskUpload, projectUpload, avatarUpload, milestoneUpload, activityLogUpload };

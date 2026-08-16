@@ -1,16 +1,25 @@
 const express = require("express");
-const { getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog } = require("../db");
+const fs = require("fs");
+const {
+  getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog, getActivityLogByDate,
+  getAttachmentsForActivityLog, getActivityLogAttachmentById, addActivityLogAttachment, deleteActivityLogAttachment,
+} = require("../db");
 const { authenticate } = require("../auth");
 const { requireWorkspaceMember, requireRole } = require("../middleware/workspace");
+const { activityLogUpload } = require("../utils/upload");
 
 const router = express.Router({ mergeParams: true });
 router.use(authenticate, requireWorkspaceMember);
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^\d{2}:\d{2}$/;
 
-// A content block is either {type:"text", text} or {type:"table", rows: [[...]]}.
-// Kept intentionally loose (validated shape, not exact schema) so the
-// frontend can evolve the editor without a backend change every time.
+// A content block is either {type:"text", text, time?, links?} or
+// {type:"table", rows: [[...]]}. Kept intentionally loose (validated shape,
+// not exact schema) so the frontend can evolve the editor without a backend
+// change every time. time and links are optional on text blocks — a quick
+// timestamp and a way to paste supporting links (Google Drive, etc.)
+// alongside what was worked on.
 function validateContent(content) {
   if (!Array.isArray(content)) return "Log content must be a list of blocks";
   if (content.length > 200) return "That's a lot of blocks — keep it under 200 per entry";
@@ -18,6 +27,16 @@ function validateContent(content) {
     if (!block || typeof block !== "object") return "Each block must be an object";
     if (block.type === "text") {
       if (typeof block.text !== "string" || block.text.length > 8000) return "A text block is too long or invalid";
+      if (block.time !== undefined && block.time !== null && block.time !== "" && !TIME_RE.test(block.time)) {
+        return "A text block's time must be in HH:MM format";
+      }
+      if (block.links !== undefined) {
+        if (!Array.isArray(block.links) || block.links.length > 20) return "A text block has too many links or an invalid links list";
+        for (const link of block.links) {
+          if (!link || typeof link.url !== "string" || link.url.length > 2000) return "A link is invalid";
+          if (link.label !== undefined && (typeof link.label !== "string" || link.label.length > 200)) return "A link label is invalid";
+        }
+      }
     } else if (block.type === "table") {
       if (!Array.isArray(block.rows) || block.rows.length > 200) return "A table block has too many rows or is invalid";
       for (const row of block.rows) {
@@ -67,6 +86,74 @@ router.put("/:date", async (req, res, next) => {
       userId: req.user.id, workspaceId: req.params.workspaceId, entryDate: req.params.date, content,
     });
     res.json({ log });
+  } catch (err) { next(err); }
+});
+
+// ---------------- attachments — files for a given day's entry ----------------
+// Always scoped to the CALLER's own entry for that date (nobody attaches
+// files to someone else's log) — the entry must already exist (saved at
+// least once) since attachments need a real row to attach to.
+
+router.get("/:date/attachments", async (req, res, next) => {
+  try {
+    if (!DATE_RE.test(req.params.date)) return res.status(400).json({ error: "Invalid date" });
+    const log = await getActivityLogByDate(req.user.id, req.params.workspaceId, req.params.date);
+    if (!log) return res.json({ attachments: [] }); // nothing saved yet for this date — not an error
+    res.json({ attachments: await getAttachmentsForActivityLog(log.id) });
+  } catch (err) { next(err); }
+});
+
+router.post("/:date/attachments", (req, res, next) => {
+  activityLogUpload.single("file")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}, async (req, res, next) => {
+  try {
+    if (!DATE_RE.test(req.params.date)) {
+      if (req.file) fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: "Invalid date" });
+    }
+    const log = await getActivityLogByDate(req.user.id, req.params.workspaceId, req.params.date);
+    if (!log) {
+      if (req.file) fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: "Save this day's entry before attaching files" });
+    }
+    if (!req.file) return res.status(400).json({ error: "No file was uploaded" });
+
+    const attachment = await addActivityLogAttachment({
+      activityLogId: log.id, uploadedBy: req.user.id,
+      fileName: req.file.originalname, mimeType: req.file.mimetype, sizeBytes: req.file.size, storagePath: req.file.path,
+    });
+    res.status(201).json({ attachment });
+  } catch (err) { next(err); }
+});
+
+router.get("/:date/attachments/:attachmentId/file", async (req, res, next) => {
+  try {
+    const log = await getActivityLogByDate(req.user.id, req.params.workspaceId, req.params.date);
+    if (!log) return res.status(404).json({ error: "Entry not found" });
+
+    const attachment = await getActivityLogAttachmentById(req.params.attachmentId);
+    if (!attachment || attachment.activityLogId !== log.id) return res.status(404).json({ error: "Attachment not found" });
+    if (!fs.existsSync(attachment.storagePath)) return res.status(404).json({ error: "File is missing from storage" });
+
+    res.setHeader("Content-Type", attachment.mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(attachment.fileName)}"`);
+    fs.createReadStream(attachment.storagePath).pipe(res);
+  } catch (err) { next(err); }
+});
+
+router.delete("/:date/attachments/:attachmentId", async (req, res, next) => {
+  try {
+    const log = await getActivityLogByDate(req.user.id, req.params.workspaceId, req.params.date);
+    if (!log) return res.status(404).json({ error: "Entry not found" });
+
+    const attachment = await deleteActivityLogAttachment(req.params.attachmentId);
+    if (attachment && attachment.activityLogId === log.id && fs.existsSync(attachment.storagePath)) {
+      fs.unlink(attachment.storagePath, () => {});
+    }
+    res.status(204).end();
   } catch (err) { next(err); }
 });
 

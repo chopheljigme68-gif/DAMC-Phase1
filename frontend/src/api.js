@@ -111,6 +111,31 @@ export const api = {
   getTeamActivityLogs: (workspaceId, from, to) => request(`/workspaces/${workspaceId}/activity-log/team${from ? `?from=${from}&to=${to}` : ""}`),
   saveActivityLog: (workspaceId, date, content) => request(`/workspaces/${workspaceId}/activity-log/${date}`, { method: "PUT", body: { content } }),
 
+  getActivityLogAttachments: (workspaceId, date) => request(`/workspaces/${workspaceId}/activity-log/${date}/attachments`),
+  deleteActivityLogAttachment: (workspaceId, date, attachmentId) =>
+    request(`/workspaces/${workspaceId}/activity-log/${date}/attachments/${attachmentId}`, { method: "DELETE" }),
+  uploadActivityLogAttachment: async (workspaceId, date, file) => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API_URL}/api/workspaces/${workspaceId}/activity-log/${date}/attachments`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${getToken()}` },
+      body: form,
+    });
+    let data = null;
+    try { data = await res.json(); } catch { /* empty */ }
+    if (!res.ok) throw new Error(data?.error || `Upload failed (${res.status})`);
+    return data;
+  },
+  getActivityLogAttachmentBlobUrl: async (workspaceId, date, attachmentId) => {
+    const res = await fetch(`${API_URL}/api/workspaces/${workspaceId}/activity-log/${date}/attachments/${attachmentId}/file`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error(`Failed to load file (${res.status})`);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  },
+
   updateProfile: (name) => request(`/users/me`, { method: "PATCH", body: { name } }),
 
   getTasks: (workspaceId, projectId) => request(`/workspaces/${workspaceId}/projects/${projectId}/tasks`),

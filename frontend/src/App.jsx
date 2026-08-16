@@ -5,7 +5,7 @@ import {
   Flag, ChevronLeft, ChevronRight, Trash2, GripVertical, ArrowRight, Menu, Sparkles,
   Bell, Crown, Sun, Moon, LogOut, AlertTriangle, Loader2, RefreshCw,
   UserPlus, ChevronDown, ChevronUp, Building2, Shield, FolderKanban, Lock,
-  Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, BookOpen, Table as TableIcon, Map as MapIcon,
+  Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, BookOpen, Table as TableIcon, Map as MapIcon, CheckCircle2,
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -185,25 +185,46 @@ const Spinner = ({ size = 22 }) => <Loader2 className="tfh-pulse" size={size} co
 /* ------------------------------------------------------------------ */
 /* Task card + column                                                   */
 /* ------------------------------------------------------------------ */
-const TaskCard = ({ task, users, onOpen, onDragStart, canManage }) => {
+const TaskCard = ({ task, users, onOpen, onDragStart, onComplete, canManage, currentUserId }) => {
   const assignee = memberById(users, task.assigneeId);
   const done = task.subtasks.filter((s) => s.done).length;
   const total = task.subtasks.length;
   const meta = dueMeta(task.due, task.status);
   const [dragging, setDragging] = useState(false);
+  const isDone = task.status === "done";
+  // A manager can drag/complete any card. A plain member can drag/complete
+  // only a card assigned to them — everyone else's tasks stay view-only,
+  // which the browser enforces for free: a non-draggable card simply can't
+  // start a drag, so the drop side never needs its own permission check.
+  const canModify = canManage || task.assigneeId === currentUserId;
 
   return (
     <div
       className={`tfh-card tfh-task-card tfh-stagger ${dragging ? "tfh-dragging" : ""}`}
-      draggable={canManage}
-      onDragStart={(e) => { if (canManage) { setDragging(true); onDragStart(e, task.id); } }}
+      draggable={canModify}
+      onDragStart={(e) => { if (canModify) { setDragging(true); onDragStart(e, task.id); } }}
       onDragEnd={() => setDragging(false)}
       onClick={() => onOpen(task)}
-      style={{ padding: "12px 13px", cursor: canManage ? "grab" : "pointer", display: "flex", flexDirection: "column", gap: 10 }}
+      style={{
+        padding: "12px 13px", cursor: canModify ? "grab" : "pointer", display: "flex", flexDirection: "column", gap: 10,
+        borderColor: isDone ? "var(--accent)" : undefined,
+        background: isDone ? "var(--accent-soft)" : undefined,
+      }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <span style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35 }}>{task.title}</span>
-        {canManage && <GripVertical size={14} color="var(--text-faint)" style={{ flexShrink: 0, marginTop: 2 }} />}
+        <span style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35, textDecoration: isDone ? "line-through" : "none", color: isDone ? "var(--text-dim)" : "var(--text)" }}>{task.title}</span>
+        {canModify && !isDone && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onComplete(task.id); }}
+            className="tfh-btn tfh-btn-ghost"
+            style={{ padding: 3, flexShrink: 0 }}
+            aria-label="Mark complete"
+            title="Mark complete"
+          >
+            <CheckCircle2 size={15} color="var(--text-faint)" />
+          </button>
+        )}
+        {isDone && <CheckCircle2 size={16} color="var(--accent)" style={{ flexShrink: 0, marginTop: 1 }} />}
       </div>
       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
         {task.dueTime && (
@@ -224,22 +245,22 @@ const TaskCard = ({ task, users, onOpen, onDragStart, canManage }) => {
         )}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 11.5, color: meta.tone, fontWeight: 500 }}>{meta.label}</span>
+        <span style={{ fontSize: 11.5, color: isDone ? "var(--accent)" : meta.tone, fontWeight: 500 }}>{meta.label}</span>
         <Avatar member={assignee} size={24} />
       </div>
     </div>
   );
 };
 
-const Column = ({ stage, tasks, users, onOpen, onDragStart, onDropTask, onAdd, canManage, canCreate }) => {
+const Column = ({ stage, tasks, users, onOpen, onDragStart, onDropTask, onAdd, onComplete, canManage, canCreate, currentUserId }) => {
   const [over, setOver] = useState(false);
   return (
     <div
       className="tfh-card"
       style={{ padding: 12, display: "flex", flexDirection: "column", minHeight: 200 }}
-      onDragOver={(e) => { if (canManage) { e.preventDefault(); setOver(true); } }}
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
-      onDrop={(e) => { e.preventDefault(); setOver(false); if (canManage) onDropTask(stage.id); }}
+      onDrop={(e) => { e.preventDefault(); setOver(false); onDropTask(stage.id); }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "2px 4px 12px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -259,11 +280,11 @@ const Column = ({ stage, tasks, users, onOpen, onDragStart, onDropTask, onAdd, c
       >
         {tasks.length === 0 && (
           <div style={{ fontSize: 12, color: "var(--text-faint)", textAlign: "center", padding: "18px 8px", border: "1px dashed var(--line)", borderRadius: 10 }}>
-            {canManage ? "Nothing here — drag a card over or add one." : canCreate ? "Nothing here — add one." : "Nothing here."}
+            {canCreate ? "Nothing here — add one." : "Nothing here."}
           </div>
         )}
         {tasks.map((t) => (
-          <TaskCard key={t.id} task={t} users={users} onOpen={onOpen} onDragStart={onDragStart} canManage={canManage} />
+          <TaskCard key={t.id} task={t} users={users} onOpen={onOpen} onDragStart={onDragStart} onComplete={onComplete} canManage={canManage} currentUserId={currentUserId} />
         ))}
       </div>
     </div>
@@ -1027,16 +1048,16 @@ const TaskDialog = ({ draft, setDraft, users, onClose, onSave, onDelete, saving,
   const titleRef = useRef(null);
   useEffect(() => { titleRef.current?.focus(); }, []);
 
-  // Members are view + comment only now — every field, the checklist, and
-  // every attachment/link action is admin/lead/project-lead territory, with
-  // no more "own task" carve-out (the backend enforces this identically).
-  // Anyone can fill in every field while CREATING a brand-new task — that's
-  // the capability being reopened. Once a task exists, editing any of its
-  // fields, or adding/removing attachments/links on it, stays
-  // admin/lead/project-lead-only exactly as it already is; that's the
-  // "keep viewing/editing others' tasks as is" behavior, unchanged here.
-  const canAttach = canManage;
-  const canEditFields = !draft.id || canManage;
+  // Anyone can fill in every field while CREATING a brand-new task. Once a
+  // task exists: a manager can edit/attach on any task; a plain member can
+  // now fully edit and attach on a task assigned to THEM specifically — but
+  // reassigning it to someone else stays manager-only even then (see
+  // canChangeAssignee below), and a task NOT assigned to you stays view +
+  // comment only, matching what was asked to stay unchanged.
+  const isOwnTask = draft.id && draft.assigneeId === currentUserId;
+  const canEditFields = !draft.id || canManage || isOwnTask;
+  const canAttach = canManage || isOwnTask;
+  const canChangeAssignee = !draft.id || canManage;
 
   const addSubtask = (fields) => {
     setDraft({ ...draft, subtasks: [...draft.subtasks, { id: `local-${Date.now()}`, done: false, attachmentCount: 0, linkCount: 0, ...fields }] });
@@ -1101,7 +1122,7 @@ const TaskDialog = ({ draft, setDraft, users, onClose, onSave, onDelete, saving,
           </div>
           <div>
             <label className="tfh-label">Assignee</label>
-            <select disabled={!canEditFields} className="tfh-input" value={draft.assigneeId} onChange={(e) => setDraft({ ...draft, assigneeId: e.target.value })} style={{ opacity: canEditFields ? 1 : 0.7 }}>
+            <select disabled={!canChangeAssignee} className="tfh-input" value={draft.assigneeId} onChange={(e) => setDraft({ ...draft, assigneeId: e.target.value })} style={{ opacity: canChangeAssignee ? 1 : 0.7 }}>
               {users.map((m) => <option key={m.id} value={m.id}>{m.name}{m.role === "admin" ? " (Admin)" : m.role === "lead" ? " (Lead)" : ""}</option>)}
             </select>
           </div>
@@ -1402,7 +1423,7 @@ const NotificationBell = ({ notifications, onOpenTask, onMarkRead, onMarkAll, pe
 /* ------------------------------------------------------------------ */
 /* Dashboard view                                                        */
 /* ------------------------------------------------------------------ */
-const StatCard = ({ label, value, sub, accent }) => {
+const StatCard = ({ label, value, sub, accent, onClick }) => {
   const [pop, setPop] = useState(false);
   const prevValue = useRef(value);
 
@@ -1415,16 +1436,44 @@ const StatCard = ({ label, value, sub, accent }) => {
     }
   }, [value]);
 
+  const Tag = onClick ? "button" : "div";
   return (
-    <div className="tfh-card tfh-fade-in" style={{ padding: 18, flex: 1, minWidth: 140 }}>
+    <Tag
+      onClick={onClick}
+      className={`tfh-card tfh-fade-in ${onClick ? "tfh-card-interactive" : ""}`}
+      style={{ padding: 18, flex: 1, minWidth: 140, textAlign: "left", border: onClick ? undefined : undefined }}
+    >
       <div className="tfh-label" style={{ marginBottom: 10 }}>{label}</div>
       <div className={`tfh-display ${pop ? "tfh-number-pop" : ""}`} style={{ fontSize: 30, fontWeight: 600, color: accent || "var(--text)" }}>{value}</div>
       {sub && <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 4 }}>{sub}</div>}
-    </div>
+    </Tag>
   );
 };
 
-const DashboardView = ({ tasks, users, currentUser, onOpen, goBoard, hasProject, onCreateProject }) => {
+const TaskListMini = ({ title, items, users, onOpen, emptyText, showAssignee }) => (
+  <div className="tfh-card" style={{ padding: 20 }}>
+    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>{title}</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {items.map((t) => {
+        const meta = dueMeta(t.due, t.status);
+        const a = memberById(users, t.assigneeId);
+        return (
+          <button key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 8px", borderRadius: 10, background: "transparent", border: "none", color: "var(--text)", textAlign: "left" }}>
+            <span style={{ width: 7, height: 7, borderRadius: 999, background: STAGES.find((s) => s.id === t.status).color, flexShrink: 0 }} />
+            {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(t.dueTime)}</span>}
+            <span style={{ fontSize: 13.5, flex: 1, textDecoration: t.status === "done" ? "line-through" : "none", color: t.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{t.title}</span>
+            <PriorityChip level={t.priority} />
+            <span style={{ fontSize: 12, color: meta.tone, minWidth: 92, textAlign: "right" }}>{meta.label}</span>
+            {showAssignee && <Avatar member={a} size={22} />}
+          </button>
+        );
+      })}
+      {items.length === 0 && <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>{emptyText}</div>}
+    </div>
+  </div>
+);
+
+const DashboardView = ({ tasks, users, currentUser, onOpen, goBoard, onOpenFiltered, hasProject, onCreateProject }) => {
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
 
@@ -1443,9 +1492,45 @@ const DashboardView = ({ tasks, users, currentUser, onOpen, goBoard, hasProject,
   const doneCount = tasks.filter((t) => t.status === "done").length;
   const activeCount = tasks.filter((t) => t.status === "todo").length;
   const overdue = tasks.filter((t) => t.status !== "done" && dueMeta(t.due, t.status).label.includes("overdue"));
-  const dueSoon = [...tasks].filter((t) => t.status !== "done").sort((a, b) => new Date(a.due) - new Date(b.due)).slice(0, 5);
+
+  const myTasks = tasks.filter((t) => t.assigneeId === currentUser?.id);
+  const teamTasks = tasks.filter((t) => t.assigneeId !== currentUser?.id);
+
+  const myDueSoon = [...myTasks].filter((t) => t.status !== "done").sort((a, b) => new Date(a.due) - new Date(b.due)).slice(0, 6);
+  const myRecentlyCompleted = [...myTasks].filter((t) => t.status === "done").sort((a, b) => new Date(b.completedAt || b.updatedAt) - new Date(a.completedAt || a.updatedAt)).slice(0, 5);
+  const teamDueSoon = [...teamTasks].filter((t) => t.status !== "done").sort((a, b) => new Date(a.due) - new Date(b.due)).slice(0, 8);
 
   const isManager = currentUser?.role === "admin" || currentUser?.role === "lead";
+
+  const mineColumn = (
+    <div style={{ display: "flex", flexDirection: "column", gap: 22, flex: "1 1 60%", minWidth: 0 }}>
+      <TaskListMini title="Coming due" items={myDueSoon} users={users} onOpen={onOpen} emptyText="Nothing outstanding." />
+      {myRecentlyCompleted.length > 0 && (
+        <TaskListMini title="Recently completed" items={myRecentlyCompleted} users={users} onOpen={onOpen} emptyText="Nothing completed yet." />
+      )}
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <StatCard label="Total tasks" value={tasks.length} sub="across all stages" onClick={() => onOpenFiltered("all")} />
+        <StatCard label="Active" value={activeCount} sub="not yet completed" accent="var(--stage-progress)" onClick={() => onOpenFiltered("active")} />
+        <StatCard label="Shipped" value={doneCount} sub="marked done" accent="var(--stage-done)" onClick={() => onOpenFiltered("shipped")} />
+        <StatCard label="Overdue" value={overdue.length} sub={overdue.length ? "needs attention" : "all clear"} accent={overdue.length ? "var(--pri-high)" : "var(--stage-done)"} onClick={() => onOpenFiltered("overdue")} />
+      </div>
+
+      <div className="tfh-card" style={{ padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>Flow across stages</span>
+          {hasProject && <button className="tfh-btn tfh-btn-ghost" onClick={goBoard} style={{ fontSize: 12 }}>Open board <ArrowRight size={13} /></button>}
+        </div>
+        <FlowMeter tasks={tasks} />
+      </div>
+    </div>
+  );
+
+  const teamColumn = (
+    <div style={{ flex: "1 1 36%", minWidth: 0 }}>
+      <TaskListMini title="Team — coming due & pending" items={teamDueSoon} users={users} onOpen={onOpen} emptyText="Nothing outstanding on the team's side." showAssignee />
+    </div>
+  );
 
   return (
     <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 22 }}>
@@ -1476,40 +1561,12 @@ const DashboardView = ({ tasks, users, currentUser, onOpen, goBoard, hasProject,
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-        <StatCard label="Total tasks" value={tasks.length} sub="across all stages" />
-        <StatCard label="Active" value={activeCount} sub="not yet completed" accent="var(--stage-progress)" />
-        <StatCard label="Shipped" value={doneCount} sub="marked done" accent="var(--stage-done)" />
-        <StatCard label="Overdue" value={overdue.length} sub={overdue.length ? "needs attention" : "all clear"} accent={overdue.length ? "var(--pri-high)" : "var(--stage-done)"} />
-      </div>
-
-      <div className="tfh-card" style={{ padding: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>Flow across stages</span>
-          {hasProject && <button className="tfh-btn tfh-btn-ghost" onClick={goBoard} style={{ fontSize: 12 }}>Open board <ArrowRight size={13} /></button>}
-        </div>
-        <FlowMeter tasks={tasks} />
-      </div>
-
-      <div className="tfh-card" style={{ padding: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>Coming due</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {dueSoon.map((t) => {
-            const meta = dueMeta(t.due, t.status);
-            const a = memberById(users, t.assigneeId);
-            return (
-              <button key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 8px", borderRadius: 10, background: "transparent", border: "none", color: "var(--text)", textAlign: "left" }}>
-                <span style={{ width: 7, height: 7, borderRadius: 999, background: STAGES.find((s) => s.id === t.status).color, flexShrink: 0 }} />
-                {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(t.dueTime)}</span>}
-                <span style={{ fontSize: 13.5, flex: 1 }}>{t.title}</span>
-                <PriorityChip level={t.priority} />
-                <span style={{ fontSize: 12, color: meta.tone, minWidth: 92, textAlign: "right" }}>{meta.label}</span>
-                <Avatar member={a} size={22} />
-              </button>
-            );
-          })}
-          {dueSoon.length === 0 && <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Nothing outstanding.</div>}
-        </div>
+      {/* Two columns on desktop (mine left/larger, team right); on mobile this
+          reverses so the team panel reads first and "your tasks" sits at the
+          bottom of the page, per feedback. */}
+      <div className="tfh-dashboard-columns">
+        {mineColumn}
+        {teamColumn}
       </div>
     </div>
   );
@@ -1518,19 +1575,35 @@ const DashboardView = ({ tasks, users, currentUser, onOpen, goBoard, hasProject,
 /* ------------------------------------------------------------------ */
 /* Board view                                                            */
 /* ------------------------------------------------------------------ */
-const BoardView = ({ tasks, users, onOpen, onMove, onAdd, onBulkAdd, search, setSearch, priorityFilter, setPriorityFilter, assigneeFilter, setAssigneeFilter, canManage }) => {
+const BoardView = ({ tasks, users, onOpen, onMove, onComplete, onAdd, onBulkAdd, search, setSearch, priorityFilter, setPriorityFilter, assigneeFilter, setAssigneeFilter, statusFilter, setStatusFilter, canManage, currentUserId }) => {
   const draggingId = useRef(null);
   const filtered = tasks
     .filter((t) => {
       if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
       if (priorityFilter !== "all" && t.priority !== priorityFilter) return false;
       if (assigneeFilter !== "all" && t.assigneeId !== assigneeFilter) return false;
+      if (statusFilter === "active" && t.status !== "todo") return false;
+      if (statusFilter === "shipped" && t.status !== "done") return false;
+      if (statusFilter === "overdue" && !(t.status !== "done" && dueMeta(t.due, t.status).label.includes("overdue"))) return false;
       return true;
     })
     .sort((a, b) => `${a.due || "9999"} ${a.dueTime || "99:99"}`.localeCompare(`${b.due || "9999"} ${b.dueTime || "99:99"}`));
 
+  const STATUS_QUICK_FILTERS = [
+    { id: "all", label: "All" },
+    { id: "active", label: "Active" },
+    { id: "shipped", label: "Shipped" },
+    { id: "overdue", label: "Overdue" },
+  ];
+
   return (
     <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%" }}>
+      {statusFilter !== "all" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--accent)", background: "var(--accent-soft)", padding: "8px 12px", borderRadius: 10, width: "fit-content" }}>
+          Showing: {STATUS_QUICK_FILTERS.find((f) => f.id === statusFilter)?.label}
+          <button onClick={() => setStatusFilter("all")} className="tfh-btn tfh-btn-ghost" style={{ padding: 2 }} aria-label="Clear filter"><X size={12} /></button>
+        </div>
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
         <div style={{ position: "relative", flex: "1 1 220px", maxWidth: 320 }}>
           <Search size={14} color="var(--text-faint)" style={{ position: "absolute", left: 11, top: 10 }} />
@@ -1553,9 +1626,9 @@ const BoardView = ({ tasks, users, onOpen, onMove, onAdd, onBulkAdd, search, set
       <div className="tfh-board-grid" style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length}, minmax(0,1fr))`, gap: 14, flex: 1, overflowX: "auto", paddingBottom: 4, maxWidth: STAGES.length <= 2 ? 720 : "none" }}>
         {STAGES.map((stage) => (
           <Column
-            key={stage.id} stage={stage} users={users} canManage={canManage} canCreate
+            key={stage.id} stage={stage} users={users} canManage={canManage} canCreate currentUserId={currentUserId}
             tasks={filtered.filter((t) => t.status === stage.id)}
-            onOpen={onOpen} onAdd={onAdd}
+            onOpen={onOpen} onAdd={onAdd} onComplete={onComplete}
             onDragStart={(e, id) => { draggingId.current = id; e.dataTransfer.effectAllowed = "move"; }}
             onDropTask={(stageId) => { if (draggingId.current) onMove(draggingId.current, stageId); draggingId.current = null; }}
           />
@@ -2109,10 +2182,56 @@ const TableBlock = ({ block, onChange, onRemove, readOnly }) => {
   );
 };
 
+const TextBlockLinks = ({ links, onChange, readOnly }) => {
+  const [label, setLabel] = useState("");
+  const [url, setUrl] = useState("");
+
+  const add = (e) => {
+    e.preventDefault();
+    if (!url.trim()) return;
+    onChange([...links, { label: label.trim() || url.trim(), url: url.trim() }]);
+    setLabel(""); setUrl("");
+  };
+  const remove = (i) => onChange(links.filter((_, idx) => idx !== i));
+
+  if (readOnly) {
+    if (links.length === 0) return null;
+    return (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+        {links.map((l, i) => (
+          <a key={i} href={l.url} target="_blank" rel="noreferrer" className="tfh-chip tfh-mono" style={{ background: "var(--accent-soft)", color: "var(--accent)", textDecoration: "none" }}>
+            <Link2 size={10} /> {l.label}
+          </a>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      {links.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 5 }}>
+          {links.map((l, i) => (
+            <span key={i} className="tfh-chip tfh-mono" style={{ background: "var(--raised)", color: "var(--text-dim)" }}>
+              <Link2 size={10} /> {l.label}
+              <button type="button" onClick={() => remove(i)} style={{ background: "none", border: "none", padding: 0, marginLeft: 3, display: "flex" }} aria-label="Remove link"><X size={10} /></button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 5 }}>
+        <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label" className="tfh-input" style={{ fontSize: 11, flex: "0 0 32%", padding: "5px 8px" }} />
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a link (Google Drive, etc.)" className="tfh-input" style={{ fontSize: 11, padding: "5px 8px" }} />
+        <button type="button" onClick={add} className="tfh-btn tfh-btn-ghost" style={{ padding: "4px 8px", flexShrink: 0 }} aria-label="Add link"><Plus size={11} /></button>
+      </div>
+    </div>
+  );
+};
+
 const BlockEditor = ({ content, setContent, readOnly }) => {
   const updateBlock = (i, next) => setContent((prev) => prev.map((b, idx) => (idx === i ? next : b)));
   const removeBlock = (i) => setContent((prev) => prev.filter((_, idx) => idx !== i));
-  const addText = () => setContent((prev) => [...prev, { type: "text", text: "" }]);
+  const addText = () => setContent((prev) => [...prev, { type: "text", text: "", time: "", links: [] }]);
   const addTable = () => setContent((prev) => [...prev, { type: "table", rows: [["", ""], ["", ""]] }]);
 
   return (
@@ -2121,15 +2240,33 @@ const BlockEditor = ({ content, setContent, readOnly }) => {
         <div key={i}>
           {block.type === "text" ? (
             readOnly ? (
-              block.text && <div style={{ fontSize: 13, color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{block.text}</div>
+              (block.text || (block.links || []).length > 0) && (
+                <div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                    {block.time && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(block.time)}</span>}
+                    {block.text && <div style={{ fontSize: 13, color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{block.text}</div>}
+                  </div>
+                  <TextBlockLinks links={block.links || []} readOnly />
+                </div>
+              )
             ) : (
-              <div style={{ position: "relative" }}>
-                <textarea
-                  className="tfh-input" rows={2} placeholder="What did you work on?"
-                  value={block.text} onChange={(e) => updateBlock(i, { ...block, text: e.target.value })}
-                  style={{ resize: "vertical", paddingRight: 30 }}
-                />
-                <button type="button" onClick={() => removeBlock(i)} className="tfh-btn tfh-btn-ghost" style={{ position: "absolute", top: 4, right: 4, padding: 3 }} aria-label="Remove"><X size={11} color="var(--text-faint)" /></button>
+              <div className="tfh-card" style={{ padding: 12, background: "var(--raised)" }}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "flex-start" }}>
+                  <input
+                    type="time" className="tfh-input" style={{ width: 110, fontSize: 12, flexShrink: 0 }}
+                    value={block.time || ""} onChange={(e) => updateBlock(i, { ...block, time: e.target.value })}
+                    aria-label="Time"
+                  />
+                  <div style={{ position: "relative", flex: 1 }}>
+                    <textarea
+                      className="tfh-input" rows={2} placeholder="What did you work on?"
+                      value={block.text} onChange={(e) => updateBlock(i, { ...block, text: e.target.value })}
+                      style={{ resize: "vertical", paddingRight: 30 }}
+                    />
+                    <button type="button" onClick={() => removeBlock(i)} className="tfh-btn tfh-btn-ghost" style={{ position: "absolute", top: 4, right: 4, padding: 3 }} aria-label="Remove"><X size={11} color="var(--text-faint)" /></button>
+                  </div>
+                </div>
+                <TextBlockLinks links={block.links || []} onChange={(links) => updateBlock(i, { ...block, links })} />
               </div>
             )
           ) : (
@@ -2158,6 +2295,11 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage }) => {
   const [teamLoading, setTeamLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [attachments, setAttachments] = useState([]);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+  const [fileError, setFileError] = useState("");
 
   const loadMine = async () => {
     setLoading(true);
@@ -2175,6 +2317,48 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage }) => {
     setContent(existing ? existing.content : []);
     setSaved(false);
   }, [selectedDate, myLogs]);
+
+  const entryExists = myLogs.some((l) => l.entryDate === selectedDate);
+
+  useEffect(() => {
+    if (tab !== "mine") return;
+    setAttachmentsLoading(true);
+    setFileError("");
+    api.getActivityLogAttachments(workspaceId, selectedDate).then(({ attachments }) => setAttachments(attachments)).finally(() => setAttachmentsLoading(false));
+  }, [workspaceId, selectedDate, tab, entryExists]);
+
+  const handleFiles = async (fileList) => {
+    const { accepted, rejected } = validateFiles(fileList);
+    if (rejected.length) setFileError(`${rejected.join(", ")} — over the ${MAX_FILE_MB}MB limit, not added.`);
+    else setFileError("");
+    if (accepted.length === 0) return;
+    setUploading(true);
+    try {
+      for (const file of accepted) {
+        const { attachment } = await api.uploadActivityLogAttachment(workspaceId, selectedDate, file);
+        setAttachments((prev) => [...prev, attachment]);
+      }
+    } catch (err) {
+      setFileError(err.message);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+  const removeFile = async (attachmentId) => {
+    await api.deleteActivityLogAttachment(workspaceId, selectedDate, attachmentId);
+    setAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
+  };
+  const openFile = async (attachmentId, fileName, isImage) => {
+    try {
+      const url = await api.getActivityLogAttachmentBlobUrl(workspaceId, selectedDate, attachmentId);
+      const a = document.createElement("a");
+      a.href = url;
+      if (isImage) a.target = "_blank"; else a.download = fileName;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     if (tab !== "team" || !canManage) return;
@@ -2225,6 +2409,34 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage }) => {
               </div>
             </div>
             <BlockEditor content={content} setContent={setContent} />
+
+            <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+              <div className="tfh-label" style={{ marginBottom: 10 }}>Files for this entry</div>
+              {!entryExists ? (
+                <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Save this day's entry first, then you can attach files here.</div>
+              ) : (
+                <>
+                  {attachmentsLoading ? (
+                    <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Loading…</div>
+                  ) : attachments.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+                      {attachments.map((a) => (
+                        <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 8px", borderRadius: 7, background: "var(--raised)" }}>
+                          {a.mimeType?.startsWith("image/") ? <ImageIcon size={12} color="var(--text-faint)" /> : <Paperclip size={12} color="var(--text-faint)" />}
+                          <button type="button" onClick={() => openFile(a.id, a.fileName, a.mimeType?.startsWith("image/"))} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", fontSize: 12, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.fileName}</button>
+                          <button type="button" onClick={() => removeFile(a.id)} className="tfh-btn tfh-btn-ghost" style={{ padding: 3 }} aria-label="Remove file"><X size={11} /></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => handleFiles(e.target.files)} />
+                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11.5, padding: "4px 9px" }}>
+                    <Upload size={11} /> {uploading ? "Uploading…" : "Add file"}
+                  </button>
+                  {fileError && <div style={{ fontSize: 11, color: "var(--pri-high)", marginTop: 6 }}>{fileError}</div>}
+                </>
+              )}
+            </div>
           </div>
 
           <div>
@@ -2238,7 +2450,7 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage }) => {
                 {myLogs.map((l) => (
                   <button key={l.id} onClick={() => setSelectedDate(l.entryDate)} className="tfh-card" style={{ padding: "10px 14px", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", border: l.entryDate === selectedDate ? "1px solid var(--accent)" : undefined }}>
                     <span style={{ fontSize: 12.5, fontWeight: 600 }}>{new Date(l.entryDate + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
-                    <span style={{ fontSize: 11, color: "var(--text-faint)" }}>{l.content.length} block{l.content.length === 1 ? "" : "s"}</span>
+                    <span style={{ fontSize: 11, color: "var(--text-faint)" }}>{l.content.length} {l.content.length === 1 ? "activity" : "activities"}</span>
                   </button>
                 ))}
               </div>
@@ -3660,6 +3872,7 @@ function Workspace() {
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [draft, setDraft] = useState(null);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
@@ -3771,9 +3984,17 @@ function Workspace() {
       let taskId;
 
       if (draft.id) {
+        // Managers can change everything, including who it's assigned to.
+        // A plain member editing their OWN task gets the same full patch
+        // minus assigneeId — reassigning stays manager-only even then.
+        // Anyone else shouldn't reach this path at all (fields are locked
+        // client-side and the server rejects it regardless).
+        const isOwnTask = draft.assigneeId === user.id;
         const patch = canManage
           ? { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, assigneeId: draft.assigneeId, due: draft.due, dueTime: draft.dueTime || null }
-          : { status: draft.status }; // members can only ever change status — enforced server-side too
+          : isOwnTask
+            ? { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, due: draft.due, dueTime: draft.dueTime || null }
+            : { status: draft.status };
         await api.updateTask(currentId, projectId, draft.id, patch);
         const { task } = await api.setSubtasks(currentId, projectId, draft.id, cleanSubtasks);
         savedTask = task;
@@ -3851,6 +4072,7 @@ function Workspace() {
     const { task } = await api.updateTask(currentId, projectId, id, { status });
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...task } : t)));
   };
+  const completeTask = (id) => moveTask(id, "done");
 
   const reassignTask = async (id, assigneeId) => {
     const { task } = await api.updateTask(currentId, projectId, id, { assigneeId });
@@ -3965,7 +4187,7 @@ function Workspace() {
       {/* Main */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 24px", borderBottom: "1px solid var(--line)" }}>
-          <button className="tfh-btn tfh-btn-ghost tfh-hide-mobile" style={{ display: "none" }} onClick={() => setMobileNavOpen(true)}><Menu size={16} /></button>
+          <button className="tfh-btn tfh-btn-ghost tfh-show-mobile-only" onClick={() => setMobileNavOpen(true)} aria-label="Open menu"><Menu size={16} /></button>
           <span className="tfh-mono" style={{ fontSize: 11, color: "var(--text-faint)" }}>
             {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
           </span>
@@ -3983,13 +4205,14 @@ function Workspace() {
         </div>
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
-          {view === "dashboard" && <DashboardView tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} goBoard={() => setView("board")} hasProject={!!projectId} onCreateProject={createProject} />}
+          {view === "dashboard" && <DashboardView tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} goBoard={() => setView("board")} onOpenFiltered={(filterId) => { setStatusFilter(filterId); setView("board"); }} hasProject={!!projectId} onCreateProject={createProject} />}
           {view === "board" && (
             <BoardView
-              tasks={tasks} users={users} onOpen={openEdit} onMove={moveTask} onAdd={openCreate} onBulkAdd={() => setBulkAddOpen(true)} canManage={canManageProject}
+              tasks={tasks} users={users} onOpen={openEdit} onMove={moveTask} onComplete={completeTask} onAdd={openCreate} onBulkAdd={() => setBulkAddOpen(true)} canManage={canManageProject} currentUserId={user.id}
               search={search} setSearch={setSearch}
               priorityFilter={priorityFilter} setPriorityFilter={setPriorityFilter}
               assigneeFilter={assigneeFilter} setAssigneeFilter={setAssigneeFilter}
+              statusFilter={statusFilter} setStatusFilter={setStatusFilter}
             />
           )}
           {view === "team" && <TeamView tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} onSetRole={setRole} onSetTitle={setTitle} onRemoveMember={removeMember} onInvite={invite} canManage={canManage} workspaceId={currentId} />}

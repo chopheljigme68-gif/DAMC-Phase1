@@ -68,7 +68,7 @@ body {
 .tfh-display { font-family: "Fraunces", serif; }
 .tfh-mono { font-family: "IBM Plex Mono", monospace; }
 
-button { font-family: inherit; cursor: pointer; }
+button { font-family: inherit; cursor: pointer; color: inherit; }
 input, textarea, select { font-family: inherit; }
 input:focus, textarea:focus, select:focus, button:focus-visible {
   outline: 2px solid var(--accent);
@@ -161,11 +161,18 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 .tfh-pulse { animation: tfhPulse 1.6s ease-in-out infinite; }
 @keyframes tfhPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
+.tfh-dashboard-columns { display: flex; gap: 22px; align-items: flex-start; }
+.tfh-show-mobile-only { display: none; }
+
 @media (max-width: 860px) {
   .tfh-sidebar { position: fixed; left: 0; top: 0; bottom: 0; z-index: 40; transform: translateX(-100%); transition: transform 0.2s ease; }
   .tfh-sidebar.open { transform: translateX(0); }
   .tfh-board-grid { grid-auto-flow: column; grid-auto-columns: 82%; }
   .tfh-hide-mobile { display: none !important; }
+  .tfh-show-mobile-only { display: inline-flex !important; }
+  /* On mobile the team panel (second child) reads first, and "your tasks"
+     (first child) sits at the bottom of the page. */
+  .tfh-dashboard-columns { flex-direction: column-reverse; gap: 26px; }
 }
 
 /* ============================================================ */
