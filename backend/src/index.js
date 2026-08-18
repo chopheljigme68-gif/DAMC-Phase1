@@ -68,4 +68,28 @@ initSocket(server, CORS_ORIGIN);
 server.listen(PORT, () => {
   console.log(`Team Flow Hub API + realtime server listening on http://localhost:${PORT}`);
   startDueSoonScheduler();
+  warnIfAppUrlMisconfigured();
 });
+
+// Every invite and password-reset email is built from APP_URL. Left unset
+// (or still the local default) on a real Render deployment, every one of
+// those links silently points at localhost and fails for the recipient —
+// with no error anywhere until someone actually clicks the link. RENDER is
+// a variable Render sets automatically on every service it runs, so this
+// check only fires in the situation that actually matters (deployed, but
+// misconfigured) and stays silent during normal local development.
+function warnIfAppUrlMisconfigured() {
+  const isOnRender = process.env.RENDER === "true";
+  const appUrl = process.env.APP_URL || "";
+  const looksLocal = !appUrl || appUrl.includes("localhost") || appUrl.includes("127.0.0.1");
+  if (isOnRender && looksLocal) {
+    console.warn("\n" + "!".repeat(70));
+    console.warn("! APP_URL IS MISCONFIGURED ON THIS RENDER DEPLOYMENT");
+    console.warn(`! Current value: ${appUrl || "(not set)"}`);
+    console.warn("! Every invite and password-reset email link will point at localhost");
+    console.warn("! and fail for whoever clicks it. Fix: Render dashboard -> this service");
+    console.warn("! -> Environment -> set APP_URL to your real frontend URL, e.g.");
+    console.warn("!   APP_URL=https://your-app.vercel.app");
+    console.warn("!".repeat(70) + "\n");
+  }
+}
