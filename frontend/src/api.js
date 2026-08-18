@@ -109,6 +109,7 @@ export const api = {
 
   getMyActivityLogs: (workspaceId, from, to) => request(`/workspaces/${workspaceId}/activity-log/mine${from ? `?from=${from}&to=${to}` : ""}`),
   getTeamActivityLogs: (workspaceId, from, to) => request(`/workspaces/${workspaceId}/activity-log/team${from ? `?from=${from}&to=${to}` : ""}`),
+  getTeamActivityToday: (workspaceId) => request(`/workspaces/${workspaceId}/activity-log/team/today`),
   saveActivityLog: (workspaceId, date, content) => request(`/workspaces/${workspaceId}/activity-log/${date}`, { method: "PUT", body: { content } }),
 
   getActivityLogAttachments: (workspaceId, date) => request(`/workspaces/${workspaceId}/activity-log/${date}/attachments`),

@@ -5,7 +5,7 @@ import {
   Flag, ChevronLeft, ChevronRight, Trash2, GripVertical, ArrowRight, Menu, Sparkles,
   Bell, Crown, Sun, Moon, LogOut, AlertTriangle, Loader2, RefreshCw,
   UserPlus, ChevronDown, ChevronUp, Building2, Shield, FolderKanban, Lock,
-  Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, BookOpen, Table as TableIcon, Map as MapIcon, CheckCircle2,
+  Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, BookOpen, Table as TableIcon, Map as MapIcon, CheckCircle2, UserX,
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -147,13 +147,15 @@ const Avatar = ({ member, size = 28 }) => {
   return (
     <span
       className="tfh-avatar"
-      title={member ? `${member.name}${member.role === "admin" ? " · Admin" : member.role === "lead" ? " · Lead" : ""}` : undefined}
-      style={{ width: size, height: size, background: member?.color || "var(--text-faint)", fontSize: size * 0.4, overflow: "hidden" }}
+      title={member ? `${member.name}${member.role === "admin" ? " · Admin" : member.role === "lead" ? " · Lead" : ""}` : "Assigned to someone no longer on the team"}
+      style={{ width: size, height: size, background: member?.color || "var(--raised)", border: member ? undefined : "1px dashed var(--text-faint)", fontSize: size * 0.4, overflow: "hidden" }}
     >
       {photoUrl ? (
         <img src={photoUrl} alt={member.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      ) : member ? (
+        member.initials
       ) : (
-        member?.initials || "?"
+        <UserX size={size * 0.55} color="var(--text-faint)" />
       )}
       {member?.role === "lead" && (
         <Crown size={size * 0.42} color="#12141c" fill="var(--accent)" style={{ position: "absolute", top: -size * 0.32, right: -size * 0.12 }} />
@@ -1332,28 +1334,6 @@ const BulkAddModal = ({ users, currentUserId, onClose, onSubmit }) => {
 /* ------------------------------------------------------------------ */
 /* Flow meter                                                           */
 /* ------------------------------------------------------------------ */
-const FlowMeter = ({ tasks }) => {
-  const total = tasks.length || 1;
-  return (
-    <div>
-      <div className="tfh-flow-bar">
-        {STAGES.map((s) => {
-          const count = tasks.filter((t) => t.status === s.id).length;
-          return <div key={s.id} className="tfh-flow-seg" style={{ width: `${(count / total) * 100}%`, background: s.color }} title={`${s.label}: ${count}`} />;
-        })}
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginTop: 10 }}>
-        {STAGES.map((s) => (
-          <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-dim)" }}>
-            <span style={{ width: 7, height: 7, borderRadius: 999, background: s.color }} />
-            {s.label} <span className="tfh-mono" style={{ color: "var(--text)" }}>{tasks.filter((t) => t.status === s.id).length}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
 /* ------------------------------------------------------------------ */
 /* Notification bell                                                    */
 /* ------------------------------------------------------------------ */
@@ -1473,9 +1453,69 @@ const TaskListMini = ({ title, items, users, onOpen, emptyText, showAssignee }) 
   </div>
 );
 
-const DashboardView = ({ tasks, users, currentUser, onOpen, goBoard, onOpenFiltered, hasProject, onCreateProject }) => {
+// Merges tasks due today with today's activity-log text blocks into one
+// time-sorted agenda. Timed items (has a specific clock time) come first in
+// order; untimed items follow. Only tasks can be "upcoming" — you can't log
+// activity for a day that hasn't happened yet, so that concept doesn't
+// apply to the activity-log side of this merge.
+const mergeAgenda = (tasksToday, activityBlocksToday) => {
+  const items = [
+    ...tasksToday.map((t) => ({ time: t.dueTime || null, label: t.title, kind: "task", task: t })),
+    ...activityBlocksToday.filter((b) => b.type === "text" && b.text?.trim()).map((b) => ({ time: b.time || null, label: b.text, kind: "activity" })),
+  ];
+  const timed = items.filter((i) => i.time).sort((a, b) => a.time.localeCompare(b.time));
+  const untimed = items.filter((i) => !i.time);
+  return [...timed, ...untimed];
+};
+
+const AgendaRow = ({ item, onOpen }) => (
+  <div
+    onClick={item.kind === "task" ? () => onOpen(item.task) : undefined}
+    style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: item.kind === "task" ? "pointer" : "default" }}
+  >
+    <span className="tfh-mono" style={{ fontSize: 11, color: item.time ? "var(--accent)" : "var(--text-faint)", minWidth: 58, flexShrink: 0, marginTop: 1 }}>
+      {item.time ? formatTimeLabel(item.time) : "Anytime"}
+    </span>
+    <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 12.5, color: "var(--text)", textDecoration: item.kind === "task" && item.task.status === "done" ? "line-through" : "none" }}>{item.label}</span>
+      {item.kind === "task" && <PriorityChip level={item.task.priority} />}
+      {item.kind === "activity" && <span className="tfh-chip" style={{ fontSize: 9.5, background: "var(--raised)", color: "var(--text-faint)" }}>Logged</span>}
+    </div>
+  </div>
+);
+
+const AgendaCard = ({ title, items, onOpen, emptyText }) => (
+  <div className="tfh-card" style={{ padding: 18 }}>
+    <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>{title}</div>
+    {items.length === 0 ? (
+      <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>{emptyText}</div>
+    ) : (
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        {items.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} />)}
+      </div>
+    )}
+  </div>
+);
+
+const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, onOpenFiltered, hasProject, onCreateProject }) => {
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
+  const [myLogs, setMyLogs] = useState([]);
+  const [teamToday, setTeamToday] = useState([]);
+  const [logsLoading, setLogsLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLogsLoading(true);
+    Promise.all([api.getMyActivityLogs(workspaceId), api.getTeamActivityToday(workspaceId)])
+      .then(([mine, team]) => {
+        if (cancelled) return;
+        setMyLogs(mine.logs);
+        setTeamToday(team.logs);
+      })
+      .finally(() => { if (!cancelled) setLogsLoading(false); });
+    return () => { cancelled = true; };
+  }, [workspaceId]);
 
   const submitNewProject = async (e) => {
     e.preventDefault();
@@ -1489,46 +1529,96 @@ const DashboardView = ({ tasks, users, currentUser, onOpen, goBoard, onOpenFilte
     }
   };
 
+  const todayStr = new Date().toISOString().slice(0, 10);
   const doneCount = tasks.filter((t) => t.status === "done").length;
   const activeCount = tasks.filter((t) => t.status === "todo").length;
   const overdue = tasks.filter((t) => t.status !== "done" && dueMeta(t.due, t.status).label.includes("overdue"));
 
-  const myTasks = tasks.filter((t) => t.assigneeId === currentUser?.id);
-  const teamTasks = tasks.filter((t) => t.assigneeId !== currentUser?.id);
-
-  const myDueSoon = [...myTasks].filter((t) => t.status !== "done").sort((a, b) => new Date(a.due) - new Date(b.due)).slice(0, 6);
-  const myRecentlyCompleted = [...myTasks].filter((t) => t.status === "done").sort((a, b) => new Date(b.completedAt || b.updatedAt) - new Date(a.completedAt || a.updatedAt)).slice(0, 5);
-  const teamDueSoon = [...teamTasks].filter((t) => t.status !== "done").sort((a, b) => new Date(a.due) - new Date(b.due)).slice(0, 8);
+  const myTasksToday = tasks.filter((t) => t.assigneeId === currentUser?.id && t.due === todayStr);
+  const myUpcoming = [...tasks]
+    .filter((t) => t.assigneeId === currentUser?.id && t.status !== "done" && t.due && t.due > todayStr)
+    .sort((a, b) => new Date(a.due) - new Date(b.due))
+    .slice(0, 6);
+  const myTodayEntry = myLogs.find((l) => l.entryDate === todayStr);
+  const myAgenda = mergeAgenda(myTasksToday, myTodayEntry?.content || []);
 
   const isManager = currentUser?.role === "admin" || currentUser?.role === "lead";
 
   const mineColumn = (
-    <div style={{ display: "flex", flexDirection: "column", gap: 22, flex: "1 1 60%", minWidth: 0 }}>
-      <TaskListMini title="Coming due" items={myDueSoon} users={users} onOpen={onOpen} emptyText="Nothing outstanding." />
-      {myRecentlyCompleted.length > 0 && (
-        <TaskListMini title="Recently completed" items={myRecentlyCompleted} users={users} onOpen={onOpen} emptyText="Nothing completed yet." />
-      )}
-
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-        <StatCard label="Total tasks" value={tasks.length} sub="across all stages" onClick={() => onOpenFiltered("all")} />
-        <StatCard label="Active" value={activeCount} sub="not yet completed" accent="var(--stage-progress)" onClick={() => onOpenFiltered("active")} />
-        <StatCard label="Shipped" value={doneCount} sub="marked done" accent="var(--stage-done)" onClick={() => onOpenFiltered("shipped")} />
-        <StatCard label="Overdue" value={overdue.length} sub={overdue.length ? "needs attention" : "all clear"} accent={overdue.length ? "var(--pri-high)" : "var(--stage-done)"} onClick={() => onOpenFiltered("overdue")} />
-      </div>
-
-      <div className="tfh-card" style={{ padding: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>Flow across stages</span>
-          {hasProject && <button className="tfh-btn tfh-btn-ghost" onClick={goBoard} style={{ fontSize: 12 }}>Open board <ArrowRight size={13} /></button>}
-        </div>
-        <FlowMeter tasks={tasks} />
+    <div style={{ display: "flex", flexDirection: "column", gap: 18, flex: "1 1 58%", minWidth: 0 }}>
+      <AgendaCard title="My today's activities" items={myAgenda} onOpen={onOpen} emptyText="Nothing scheduled or logged for today yet." />
+      <div className="tfh-card" style={{ padding: 18 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>Upcoming works</div>
+        {myUpcoming.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing upcoming.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {myUpcoming.map((t) => (
+              <div key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: "pointer" }}>
+                <span className="tfh-mono" style={{ fontSize: 11, color: "var(--text-faint)", minWidth: 78, flexShrink: 0 }}>
+                  {new Date(t.due + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                </span>
+                <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
+                <PriorityChip level={t.priority} />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 
   const teamColumn = (
-    <div style={{ flex: "1 1 36%", minWidth: 0 }}>
-      <TaskListMini title="Team — coming due & pending" items={teamDueSoon} users={users} onOpen={onOpen} emptyText="Nothing outstanding on the team's side." showAssignee />
+    <div style={{ flex: "1 1 40%", minWidth: 0, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, padding: "0 2px" }}>Team activities</div>
+      {users.filter((u) => u.id !== currentUser?.id).map((u) => {
+        const theirTasksToday = tasks.filter((t) => t.assigneeId === u.id && t.due === todayStr);
+        const theirEntry = teamToday.find((l) => l.userId === u.id);
+        const theirAgenda = mergeAgenda(theirTasksToday, theirEntry?.content || []).slice(0, 4);
+        const theirUpcoming = [...tasks]
+          .filter((t) => t.assigneeId === u.id && t.status !== "done" && t.due && t.due > todayStr)
+          .sort((a, b) => new Date(a.due) - new Date(b.due))
+          .slice(0, 2);
+        if (theirAgenda.length === 0 && theirUpcoming.length === 0) return null;
+        return (
+          <div key={u.id} className="tfh-card" style={{ padding: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <Avatar member={u} size={22} />
+              <span style={{ fontSize: 12.5, fontWeight: 700 }}>{u.name}</span>
+            </div>
+            {theirAgenda.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {theirAgenda.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} />)}
+              </div>
+            ) : (
+              <div style={{ fontSize: 11.5, color: "var(--text-faint)", padding: "0 8px" }}>Nothing today.</div>
+            )}
+            {theirUpcoming.length > 0 && (
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
+                <div style={{ fontSize: 10.5, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4, padding: "0 8px" }}>Upcoming</div>
+                {theirUpcoming.map((t) => (
+                  <div key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 8px", borderRadius: 8, cursor: "pointer" }}>
+                    <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--text-faint)", minWidth: 60, flexShrink: 0 }}>
+                      {new Date(t.due + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                    </span>
+                    <span style={{ fontSize: 12 }}>{t.title}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {!logsLoading && users.filter((u) => u.id !== currentUser?.id).every((u) => {
+        const t = tasks.filter((x) => x.assigneeId === u.id && x.due === todayStr).length;
+        const e = teamToday.find((l) => l.userId === u.id);
+        const up = tasks.filter((x) => x.assigneeId === u.id && x.status !== "done" && x.due && x.due > todayStr).length;
+        return t === 0 && !e && up === 0;
+      }) && (
+        <div className="tfh-card" style={{ padding: 18, textAlign: "center" }}>
+          <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Nothing logged or due for the team right now.</div>
+        </div>
+      )}
     </div>
   );
 
@@ -1536,7 +1626,7 @@ const DashboardView = ({ tasks, users, currentUser, onOpen, goBoard, onOpenFilte
     <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 22 }}>
       <div>
         <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>{isManager ? "Studio pulse" : "Your tasks"}</div>
-        <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>{isManager ? "Where the team's work stands right now, at a glance." : "Everything currently assigned to you in this project."}</div>
+        <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</div>
       </div>
 
       {!hasProject && (
@@ -1567,6 +1657,14 @@ const DashboardView = ({ tasks, users, currentUser, onOpen, goBoard, onOpenFilte
       <div className="tfh-dashboard-columns">
         {mineColumn}
         {teamColumn}
+      </div>
+
+      {/* Totals live at the very end of the page, deliberately last. */}
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <StatCard label="Total tasks" value={tasks.length} sub="across all stages" onClick={() => onOpenFiltered("all")} />
+        <StatCard label="Active" value={activeCount} sub="not yet completed" accent="var(--stage-progress)" onClick={() => onOpenFiltered("active")} />
+        <StatCard label="Shipped" value={doneCount} sub="marked done" accent="var(--stage-done)" onClick={() => onOpenFiltered("shipped")} />
+        <StatCard label="Overdue" value={overdue.length} sub={overdue.length ? "needs attention" : "all clear"} accent={overdue.length ? "var(--pri-high)" : "var(--stage-done)"} onClick={() => onOpenFiltered("overdue")} />
       </div>
     </div>
   );
@@ -4205,7 +4303,7 @@ function Workspace() {
         </div>
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
-          {view === "dashboard" && <DashboardView tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} goBoard={() => setView("board")} onOpenFiltered={(filterId) => { setStatusFilter(filterId); setView("board"); }} hasProject={!!projectId} onCreateProject={createProject} />}
+          {view === "dashboard" && <DashboardView workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} onOpenFiltered={(filterId) => { setStatusFilter(filterId); setView("board"); }} hasProject={!!projectId} onCreateProject={createProject} />}
           {view === "board" && (
             <BoardView
               tasks={tasks} users={users} onOpen={openEdit} onMove={moveTask} onComplete={completeTask} onAdd={openCreate} onBulkAdd={() => setBulkAddOpen(true)} canManage={canManageProject} currentUserId={user.id}

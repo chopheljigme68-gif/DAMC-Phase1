@@ -72,6 +72,19 @@ router.get("/team", requireRole("admin", "lead"), async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Deliberately separate from /team above: this is scoped to ONE day and
+// open to every workspace member, not just admin/lead. Browsing anyone's
+// full history stays a supervisor capability; seeing what the team logged
+// TODAY, for a dashboard "what's everyone up to" glance, is the same kind
+// of visibility tasks already have (everyone can see everyone's tasks).
+router.get("/team/today", async (req, res, next) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const logs = await getTeamActivityLogs(req.params.workspaceId, { from: today, to: today });
+    res.json({ logs });
+  } catch (err) { next(err); }
+});
+
 // Create/update your own entry for a given date — one entry per person per
 // day, but that entry can hold any number of blocks (including multiple
 // tables, added one at a time from the editor).
