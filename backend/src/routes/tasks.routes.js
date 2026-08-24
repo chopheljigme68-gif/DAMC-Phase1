@@ -346,11 +346,13 @@ router.post("/:id/comments", async (req, res, next) => {
 
     const comment = await addComment({ taskId: req.params.id, userId: req.user.id, body: body.trim() });
 
-    // Notify everyone with a stake in this task — the assignee and any
-    // admin/lead — except whoever just wrote the comment.
+    // Notify everyone with a stake in this task — the assignee, this
+    // project's own lead (if it has one), and any workspace-wide admin/lead
+    // — except whoever just wrote the comment.
     const members = await getWorkspaceMembers(req.params.workspaceId);
     const targets = new Set();
     if (task.assigneeId !== req.user.id) targets.add(task.assigneeId);
+    if (req.project.leadId && req.project.leadId !== req.user.id) targets.add(req.project.leadId);
     members.filter((m) => (m.role === "admin" || m.role === "lead") && m.id !== req.user.id).forEach((m) => targets.add(m.id));
 
     for (const userId of targets) {

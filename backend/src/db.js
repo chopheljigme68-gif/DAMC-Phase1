@@ -502,7 +502,7 @@ const TASK_SELECT = `
   SELECT
     t.id, t.title, t.description, t.status, t.priority,
     t.assignee_id AS "assigneeId", t.created_by AS "createdBy",
-    t.workspace_id AS "workspaceId", t.project_id AS "projectId",
+    t.workspace_id AS "workspaceId", t.project_id AS "projectId", MAX(p.name) AS "projectName",
     to_char(t.due, 'YYYY-MM-DD') AS due,
     to_char(t.due_time, 'HH24:MI') AS "dueTime",
     t.created_at AS "createdAt", t.completed_at AS "completedAt", t.updated_at AS "updatedAt",
@@ -519,6 +519,7 @@ const TASK_SELECT = `
     ) AS subtasks,
     (SELECT count(*)::int FROM task_attachments a WHERE a.task_id = t.id) AS "attachmentCount"
   FROM tasks t
+  LEFT JOIN projects p ON p.id = t.project_id
   LEFT JOIN subtasks s ON s.task_id = t.id
 `;
 
@@ -532,6 +533,17 @@ async function getTasks(projectId, restrictToUserId) {
     where += ` AND t.assignee_id = $${params.length}`;
   }
   const { rows } = await pool.query(`${TASK_SELECT} WHERE ${where} GROUP BY t.id ORDER BY t.created_at ASC`, params);
+  return rows;
+}
+
+// Every task across every project in the workspace, in one call — the
+// foundation for the Board's project filter and the Dashboard showing
+// everything at once, not just the currently-selected project.
+async function getAllTasksForWorkspace(workspaceId) {
+  const { rows } = await pool.query(
+    `${TASK_SELECT} WHERE t.workspace_id = $1 GROUP BY t.id ORDER BY t.created_at ASC`,
+    [workspaceId]
+  );
   return rows;
 }
 
@@ -1123,7 +1135,7 @@ module.exports = {
   getMilestones, getMilestoneById, createMilestone, updateMilestone, deleteMilestoneById, reorderMilestone,
   addMilestoneLink, deleteMilestoneLink,
   getAttachmentsForMilestone, getMilestoneAttachmentById, addMilestoneAttachment, deleteMilestoneAttachment,
-  getTasks, getTaskById, createTask, updateTask, replaceSubtasks, deleteTask, getSubtaskById,
+  getTasks, getAllTasksForWorkspace, getTaskById, createTask, updateTask, replaceSubtasks, deleteTask, getSubtaskById,
   getAttachmentsForTask, getAttachmentById, addAttachment, deleteAttachment,
   getAttachmentsForSubtask, getSubtaskAttachmentById, addSubtaskAttachment, deleteSubtaskAttachment,
   getLinksForSubtask, addSubtaskLink, getSubtaskLinkById, deleteSubtaskLink,

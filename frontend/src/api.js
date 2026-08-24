@@ -103,7 +103,7 @@ export const api = {
   deleteProjectLink: (workspaceId, projectId, linkId) => request(`/workspaces/${workspaceId}/projects/${projectId}/links/${linkId}`, { method: "DELETE" }),
 
   getHolidays: (workspaceId) => request(`/workspaces/${workspaceId}/holidays`),
-  getRoadmap: (workspaceId) => request(`/workspaces/${workspaceId}/roadmap`),
+  getAllTasks: (workspaceId) => request(`/workspaces/${workspaceId}/tasks`),
   addHoliday: (workspaceId, date, name) => request(`/workspaces/${workspaceId}/holidays`, { method: "POST", body: { date, name } }),
   deleteHoliday: (workspaceId, holidayId) => request(`/workspaces/${workspaceId}/holidays/${holidayId}`, { method: "DELETE" }),
 

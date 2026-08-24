@@ -2,7 +2,7 @@ const express = require("express");
 const {
   getWorkspacesForUser, createWorkspace, getWorkspaceById, getWorkspaceMembers, getUserByEmail,
   addWorkspaceMember, setMemberRole, updateMemberTitle, removeMember, countAdmins, createInvite, getMembership,
-  getWorkspaceWorkload, getHolidays, addHoliday, deleteHoliday, getHolidayById, getRoadmapData,
+  getWorkspaceWorkload, getHolidays, addHoliday, deleteHoliday, getHolidayById, getAllTasksForWorkspace,
 } = require("../db");
 const { authenticate } = require("../auth");
 const { requireWorkspaceMember, requireRole, requirePlatformAdmin } = require("../middleware/workspace");
@@ -193,12 +193,14 @@ router.delete("/:workspaceId/holidays/:holidayId", authenticate, requireWorkspac
   } catch (err) { next(err); }
 });
 
-// Roadmap: every project's timeline plus its milestones, in one call —
-// viewable by any workspace member, same as everything else that's
-// read-only (viewing is open workspace-wide; only editing is role-gated).
-router.get("/:workspaceId/roadmap", authenticate, requireWorkspaceMember, async (req, res, next) => {
+// Every task across every project in the workspace, in one call — the
+// Board and Dashboard both use this now instead of being locked to
+// whichever project happens to be currently selected. Same visibility
+// rule as project-scoped tasks: everyone can view, editing stays
+// role-gated at the individual task level (enforced in tasks.routes.js).
+router.get("/:workspaceId/tasks", authenticate, requireWorkspaceMember, async (req, res, next) => {
   try {
-    res.json({ projects: await getRoadmapData(req.params.workspaceId) });
+    res.json({ tasks: await getAllTasksForWorkspace(req.params.workspaceId) });
   } catch (err) { next(err); }
 });
 

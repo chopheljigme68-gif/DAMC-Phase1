@@ -5,7 +5,7 @@ const {
   getAttachmentsForActivityLog, getActivityLogAttachmentById, addActivityLogAttachment, deleteActivityLogAttachment,
 } = require("../db");
 const { authenticate } = require("../auth");
-const { requireWorkspaceMember, requireRole } = require("../middleware/workspace");
+const { requireWorkspaceMember } = require("../middleware/workspace");
 const { activityLogUpload } = require("../utils/upload");
 
 const router = express.Router({ mergeParams: true });
@@ -37,6 +37,9 @@ function validateContent(content) {
           if (link.label !== undefined && (typeof link.label !== "string" || link.label.length > 200)) return "A link label is invalid";
         }
       }
+      if (block.projectId !== undefined && block.projectId !== null && typeof block.projectId !== "string") {
+        return "A text block's projectId is invalid";
+      }
     } else if (block.type === "table") {
       if (!Array.isArray(block.rows) || block.rows.length > 200) return "A table block has too many rows or is invalid";
       for (const row of block.rows) {
@@ -62,7 +65,10 @@ router.get("/mine", async (req, res, next) => {
 
 // Admin/lead only — the whole team's log, matching the supervisor-review
 // pattern from the source activity-log documents this feature is based on.
-router.get("/team", requireRole("admin", "lead"), async (req, res, next) => {
+// Was admin/lead only ("supervisor-review" pattern) — now open to every
+// workspace member, per explicit request. Viewing everyone's logged
+// activity is now the same visibility level as viewing everyone's tasks.
+router.get("/team", async (req, res, next) => {
   try {
     const { from, to } = req.query;
     if (from && !DATE_RE.test(from)) return res.status(400).json({ error: "Invalid 'from' date" });

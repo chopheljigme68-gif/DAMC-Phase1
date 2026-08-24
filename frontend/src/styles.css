@@ -170,9 +170,10 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   .tfh-board-grid { grid-auto-flow: column; grid-auto-columns: 82%; }
   .tfh-hide-mobile { display: none !important; }
   .tfh-show-mobile-only { display: inline-flex !important; }
-  /* On mobile the team panel (second child) reads first, and "your tasks"
-     (first child) sits at the bottom of the page. */
-  .tfh-dashboard-columns { flex-direction: column-reverse; gap: 26px; }
+  /* Team activities is the first child now (desktop: left column) and
+     mine is second (desktop: right column) — plain column direction on
+     mobile keeps that same top-to-bottom order, team reads first. */
+  .tfh-dashboard-columns { flex-direction: column; gap: 26px; }
 }
 
 /* ============================================================ */
