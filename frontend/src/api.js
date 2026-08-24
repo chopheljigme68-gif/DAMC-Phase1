@@ -44,6 +44,7 @@ export const api = {
 
   register: (payload) => request("/auth/register", { method: "POST", body: payload, auth: false }),
   login: (payload) => request("/auth/login", { method: "POST", body: payload, auth: false }),
+  getHealth: () => request("/health", { auth: false }),
   me: () => request("/auth/me"),
   forgotPassword: (email) => request("/auth/forgot-password", { method: "POST", body: { email }, auth: false }),
   resetPassword: (token, password) => request("/auth/reset-password", { method: "POST", body: { token, password }, auth: false }),
@@ -174,8 +175,6 @@ export const api = {
     request(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/subtasks/${subtaskId}/links`, { method: "POST", body: { label, url } }),
   deleteSubtaskLink: (workspaceId, projectId, taskId, subtaskId, linkId) =>
     request(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/subtasks/${subtaskId}/links/${linkId}`, { method: "DELETE" }),
-
-  getAnalytics: (workspaceId, projectId) => request(`/workspaces/${workspaceId}/projects/${projectId}/analytics`),
 
   getAttachments: (workspaceId, projectId, taskId) => request(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/attachments`),
   deleteAttachment: (workspaceId, projectId, taskId, attachmentId) =>

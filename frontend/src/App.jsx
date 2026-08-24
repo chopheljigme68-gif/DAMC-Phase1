@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import {
-  LayoutDashboard, Columns3, Users, CalendarDays, BarChart3, Search, Plus, X, Check,
+  LayoutDashboard, Columns3, Users, CalendarDays, Search, Plus, X, Check,
   Flag, ChevronLeft, ChevronRight, Trash2, GripVertical, ArrowRight, Menu, Sparkles,
   Bell, Crown, Sun, Moon, LogOut, AlertTriangle, Loader2, RefreshCw,
   UserPlus, ChevronDown, ChevronUp, Building2, Shield, FolderKanban, Lock,
@@ -3441,147 +3441,136 @@ const MilestonesView = ({ workspaceId, projectId, project, canManage, isAdmin, u
 };
 
 /* ------------------------------------------------------------------ */
-/* Analytics view — driven entirely by server-computed data              */
+/* System performance — real, measured metrics: API round-trip, DB      */
+/* query latency, realtime socket status, backend uptime                */
 /* ------------------------------------------------------------------ */
-const AnalyticsView = ({ analytics, users, loading, currentUser, onReassign, onOpenTaskById }) => {
-  if (loading || !analytics) {
-    return <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 40, justifyContent: "center" }}><Spinner /> <span style={{ fontSize: 13, color: "var(--text-dim)" }}>Crunching real numbers…</span></div>;
-  }
-  const { totals, completedByDay, velocityByMember, workload, overdue } = analytics;
-
-  return (
-    <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div>
-        <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>Analytics</div>
-        <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>Computed live from real task timestamps on the server.</div>
-      </div>
-
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-        <StatCard label="Cleared this week" value={totals.shippedThisWeek} sub="tasks marked done" accent="var(--stage-done)" />
-        <StatCard label="Avg cycle time" value={`${totals.avgCycleTimeDays}d`} sub="create → done" />
-        <StatCard label="Active now" value={totals.active} sub="not yet completed" accent="var(--stage-progress)" />
-        <StatCard label="Overdue" value={totals.overdue} sub={totals.overdue ? "needs attention" : "all clear"} accent={totals.overdue ? "var(--pri-high)" : "var(--stage-done)"} />
-      </div>
-
-      <div className="tfh-card" style={{ padding: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>Completions — last 14 days</div>
-        <div style={{ width: "100%", height: 200 }}>
-          <ResponsiveContainer>
-            <LineChart data={completedByDay} margin={{ top: 6, right: 12, left: -20, bottom: 0 }}>
-              <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
-              <XAxis dataKey="label" tick={{ fill: "var(--chart-tick)", fontSize: 10 }} axisLine={{ stroke: "var(--chart-grid)" }} tickLine={false} interval={1} />
-              <YAxis allowDecimals={false} tick={{ fill: "var(--chart-tick)", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }} />
-              <Line type="monotone" dataKey="count" stroke="var(--accent)" strokeWidth={2.5} dot={{ r: 3, fill: "var(--accent)" }} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div className="tfh-card" style={{ padding: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>Velocity by person — last 7 days</div>
-        <div style={{ width: "100%", height: 180 }}>
-          <ResponsiveContainer>
-            <BarChart data={velocityByMember} margin={{ top: 0, right: 8, left: -20, bottom: 0 }}>
-              <XAxis dataKey="name" tick={{ fill: "var(--chart-tick)", fontSize: 11 }} axisLine={{ stroke: "var(--chart-grid)" }} tickLine={false} />
-              <YAxis allowDecimals={false} tick={{ fill: "var(--chart-tick)", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }} cursor={{ fill: "var(--raised)" }} />
-              <Bar dataKey="completed" radius={[6, 6, 0, 0]}>
-                {velocityByMember.map((d, i) => <Cell key={i} fill={d.color} />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div className="tfh-card" style={{ padding: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>Workload balance</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {workload.map((w) => (
-            <div key={w.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 9, background: w.overloaded ? "var(--accent-soft)" : "var(--raised)" }}>
-              <span style={{ width: 8, height: 8, borderRadius: 999, background: w.color }} />
-              <span style={{ fontSize: 12.5, flex: 1 }}>{w.name}</span>
-              {w.overloaded && <AlertTriangle size={13} color="var(--pri-high)" />}
-              <span className="tfh-mono" style={{ fontSize: 12, color: "var(--text-dim)" }}>{w.active} active · {w.shipped} shipped</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {overdue.length > 0 && (
-        <div className="tfh-card" style={{ padding: 20 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <AlertTriangle size={15} color="var(--pri-high)" />
-            <span style={{ fontSize: 13, fontWeight: 700 }}>Overdue tasks</span>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {overdue.map((t) => {
-              const a = memberById(users, t.assigneeId);
-              return (
-                <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--raised)", borderRadius: 9, padding: "8px 10px" }}>
-                  <button onClick={() => onOpenTaskById(t.id)} style={{ background: "none", border: "none", color: "var(--text)", fontSize: 12.5, flex: 1, textAlign: "left" }}>{t.title}</button>
-                  <PriorityChip level={t.priority} />
-                  <select className="tfh-input" style={{ width: "auto", fontSize: 11.5, padding: "4px 8px" }} value={t.assigneeId} onChange={(e) => onReassign(t.id, e.target.value)}>
-                    {users.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  </select>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
+const formatUptime = (seconds) => {
+  if (seconds < 60) return `${seconds}s`;
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 };
 
-/* ------------------------------------------------------------------ */
-/* Admin Panel — analytics + team management in one consolidated place  */
-/* ------------------------------------------------------------------ */
-// "System health" here means workspace health, not server infrastructure —
-// this app doesn't monitor its own uptime, so the honest, useful metric is
-// how much of the team's active work is on track vs. overdue. 100% means
-// nothing active is currently late.
-const SystemHealthView = ({ tasks, projects }) => {
-  const active = tasks.filter((t) => t.status !== "done");
-  const overdue = active.filter((t) => dueMeta(t.due, t.status).label.includes("overdue"));
-  const healthPct = active.length === 0 ? 100 : Math.round(((active.length - overdue.length) / active.length) * 100);
-  const healthColor = healthPct >= 85 ? "var(--stage-done)" : healthPct >= 60 ? "var(--pri-medium)" : "var(--pri-high)";
+// Bands are deliberately generous — this app talks to a free-tier Render
+// backend and a pooled Supabase connection, where 200-400ms is completely
+// normal, not a problem. These thresholds reflect that reality rather
+// than numbers borrowed from a dedicated low-latency service.
+const speedBand = (ms, fastMax, okMax) => {
+  if (ms == null) return { label: "Unreachable", color: "var(--pri-high)", score: 0 };
+  if (ms <= fastMax) return { label: "Fast", color: "var(--stage-done)", score: 100 };
+  if (ms <= okMax) return { label: "OK", color: "var(--pri-medium)", score: 70 };
+  return { label: "Slow", color: "var(--pri-high)", score: 40 };
+};
 
-  const perProject = projects.map((p) => {
-    const projectTasks = active.filter((t) => t.projectId === p.id);
-    const projectOverdue = projectTasks.filter((t) => overdue.includes(t));
-    const pct = projectTasks.length === 0 ? 100 : Math.round(((projectTasks.length - projectOverdue.length) / projectTasks.length) * 100);
-    return { ...p, activeCount: projectTasks.length, overdueCount: projectOverdue.length, pct };
-  }).filter((p) => p.activeCount > 0);
+const SystemHealthView = () => {
+  const [health, setHealth] = useState(null);
+  const [apiRoundTripMs, setApiRoundTripMs] = useState(null);
+  const [checkedAt, setCheckedAt] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
+  const runCheck = async () => {
+    setLoading(true);
+    setFailed(false);
+    const start = performance.now();
+    try {
+      const data = await api.getHealth();
+      setApiRoundTripMs(Math.round(performance.now() - start));
+      setHealth(data);
+      setCheckedAt(new Date());
+    } catch {
+      setFailed(true);
+      setHealth(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    runCheck();
+    const interval = setInterval(runCheck, 30000); // refresh every 30s while this tab is open
+    return () => clearInterval(interval);
+  }, []);
+
+  const apiBand = failed ? speedBand(null, 0, 0) : speedBand(apiRoundTripMs, 300, 800);
+  const dbBand = health?.db?.ok ? speedBand(health.db.latencyMs, 50, 200) : speedBand(null, 0, 0);
+  const socket = getSocket();
+  const realtimeOk = !!socket?.connected;
+
+  const scores = [apiBand.score, dbBand.score, realtimeOk ? 100 : 50];
+  const overallPct = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+  const overallColor = overallPct >= 85 ? "var(--stage-done)" : overallPct >= 60 ? "var(--pri-medium)" : "var(--pri-high)";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div className="tfh-card" style={{ padding: 28, textAlign: "center" }}>
-        <div className="tfh-label" style={{ marginBottom: 10 }}>System Health</div>
-        <div style={{ fontSize: 56, fontWeight: 700, color: healthColor, lineHeight: 1 }}>{healthPct}%</div>
-        <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 10 }}>
-          {overdue.length === 0
-            ? "Nothing active is overdue right now."
-            : `${overdue.length} of ${active.length} active task${active.length === 1 ? "" : "s"} ${overdue.length === 1 ? "is" : "are"} overdue.`}
+        <div className="tfh-label" style={{ marginBottom: 10 }}>System Performance</div>
+        {loading && !health ? (
+          <div style={{ fontSize: 13, color: "var(--text-faint)", padding: "20px 0" }}>Checking…</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 56, fontWeight: 700, color: overallColor, lineHeight: 1 }}>{overallPct}%</div>
+            <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 10 }}>
+              {checkedAt ? `Measured just now — checked ${checkedAt.toLocaleTimeString()}, refreshes every 30s` : "Not yet checked"}
+            </div>
+          </>
+        )}
+        <button className="tfh-btn tfh-btn-ghost" onClick={runCheck} disabled={loading} style={{ marginTop: 14 }}>
+          <RefreshCw size={13} /> {loading ? "Checking…" : "Check now"}
+        </button>
+      </div>
+
+      <div className="tfh-card" style={{ padding: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>Live measurements</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 12.5 }}>API response time</div>
+              <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Round-trip from your browser, just now</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: apiBand.color }}>{apiBand.label}</div>
+              <div className="tfh-mono" style={{ fontSize: 11, color: "var(--text-faint)" }}>{failed ? "—" : `${apiRoundTripMs}ms`}</div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 12.5 }}>Database</div>
+              <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Real query round-trip, timed on the server</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: dbBand.color }}>{health?.db?.ok ? dbBand.label : "Unreachable"}</div>
+              <div className="tfh-mono" style={{ fontSize: 11, color: "var(--text-faint)" }}>{health?.db?.ok ? `${health.db.latencyMs}ms` : "—"}</div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 12.5 }}>Realtime (live updates)</div>
+              <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Whether this browser's socket is connected right now</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: realtimeOk ? "var(--stage-done)" : "var(--pri-medium)" }}>{realtimeOk ? "Connected" : "Disconnected"}</div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 12.5 }}>Backend uptime</div>
+              <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Time since the server process last restarted</div>
+            </div>
+            <div className="tfh-mono" style={{ fontSize: 13, color: "var(--text-dim)" }}>{health ? formatUptime(health.uptimeSeconds) : "—"}</div>
+          </div>
         </div>
       </div>
 
-      {perProject.length > 0 && (
-        <div className="tfh-card" style={{ padding: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>By project</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {perProject.map((p) => (
-              <div key={p.id}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 5 }}>
-                  <span>{p.name}</span>
-                  <span style={{ color: p.pct >= 85 ? "var(--stage-done)" : p.pct >= 60 ? "var(--pri-medium)" : "var(--pri-high)", fontWeight: 600 }}>{p.pct}%</span>
-                </div>
-                <div style={{ height: 6, borderRadius: 999, background: "var(--raised)", overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${p.pct}%`, background: p.pct >= 85 ? "var(--stage-done)" : p.pct >= 60 ? "var(--pri-medium)" : "var(--pri-high)", transition: "width 0.4s ease" }} />
-                </div>
-              </div>
-            ))}
-          </div>
+      {failed && (
+        <div className="tfh-card" style={{ padding: 16, borderColor: "var(--pri-high)" }}>
+          <div style={{ fontSize: 12.5, color: "var(--pri-high)" }}>Couldn't reach the backend just now — this itself is a real signal something's down, not a display bug.</div>
         </div>
       )}
     </div>
@@ -3589,7 +3578,7 @@ const SystemHealthView = ({ tasks, projects }) => {
 };
 
 const AdminPanelView = (props) => {
-  const [tab, setTab] = useState("analytics");
+  const [tab, setTab] = useState("health");
 
   return (
     <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -3602,15 +3591,12 @@ const AdminPanelView = (props) => {
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>
-        <button className={`tfh-btn ${tab === "analytics" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("analytics")}><BarChart3 size={13} /> Analytics</button>
-        <button className={`tfh-btn ${tab === "health" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("health")}><Shield size={13} /> System Health</button>
+        <button className={`tfh-btn ${tab === "health" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("health")}><Shield size={13} /> System Performance</button>
         <button className={`tfh-btn ${tab === "team" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("team")}><Users size={13} /> Team Management</button>
       </div>
 
-      {tab === "analytics" ? (
-        <AnalyticsView analytics={props.analytics} users={props.users} loading={props.analyticsLoading} currentUser={props.currentUser} onReassign={props.onReassign} onOpenTaskById={props.onOpenTaskById} />
-      ) : tab === "health" ? (
-        <SystemHealthView tasks={props.tasks} projects={props.projects} />
+      {tab === "health" ? (
+        <SystemHealthView />
       ) : (
         <TeamView
           tasks={props.tasks} users={props.users} currentUser={props.currentUser} onOpen={props.onOpen}
@@ -3993,9 +3979,7 @@ function Workspace() {
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [notifications, setNotifications] = useState([]);
-  const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [view, setViewRaw] = useState(() => localStorage.getItem("tfh_view") || "dashboard");
   const setView = (v) => { setViewRaw(v); localStorage.setItem("tfh_view", v); };
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -4034,17 +4018,9 @@ function Workspace() {
     setLoading(false);
   };
 
-  const loadAnalytics = async (workspaceId, pid) => {
-    setAnalyticsLoading(true);
-    const res = await api.getAnalytics(workspaceId, pid);
-    setAnalytics(res);
-    setAnalyticsLoading(false);
-  };
-
   useEffect(() => {
     if (currentId && !projectsLoading) loadAll(currentId);
   }, [currentId, projectsLoading]);
-  useEffect(() => { if (currentId && projectId && view === "admin" && canManage) loadAnalytics(currentId, projectId); }, [view, currentId, projectId, canManage]);
   useEffect(() => { if (view === "admin" && !canManage) setView("dashboard"); }, [view, canManage]);
   // If there's no project (or the current one disappears), only the
   // Dashboard, Board, and Team views make sense — everything else needs a
@@ -4065,7 +4041,6 @@ function Workspace() {
     const onTaskChanged = (payload) => {
       if (payload?.workspaceId && payload.workspaceId !== currentId) return;
       api.getAllTasks(currentId).then((r) => setTasks(r.tasks));
-      if (view === "admin" && canManage && projectId) loadAnalytics(currentId, projectId);
     };
     const onLeadChanged = (payload) => {
       if (payload?.workspaceId && payload.workspaceId !== currentId) return;
@@ -4210,12 +4185,6 @@ function Workspace() {
   };
   const completeTask = (id) => moveTask(id, "done");
   const reopenTask = (id) => moveTask(id, "todo");
-
-  const reassignTask = async (id, assigneeId) => {
-    const { task } = await api.updateTask(currentId, projectId, id, { assigneeId });
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...task } : t)));
-    if (view === "admin") loadAnalytics(currentId, projectId);
-  };
 
   const setRole = async (userId, role) => {
     const { members } = await api.setMemberRole(currentId, userId, role);
@@ -4378,8 +4347,8 @@ function Workspace() {
           )}
           {view === "admin" && canManage && (
             <AdminPanelView
-              analytics={analytics} users={users} analyticsLoading={analyticsLoading} currentUser={currentUser}
-              onReassign={reassignTask} onOpenTaskById={openEditById} tasks={tasks} projects={projects} onOpen={openEdit}
+              users={users} currentUser={currentUser}
+              tasks={tasks} projects={projects} onOpen={openEdit}
               onSetRole={setRole} onSetTitle={setTitle} onRemoveMember={removeMember} onInvite={invite}
               canManage={canManage} workspaceId={currentId} onSetProjectLead={setProjectLeadFor}
             />
