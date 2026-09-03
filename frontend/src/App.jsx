@@ -37,12 +37,12 @@ const PRIORITIES = {
 };
 const NAV = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "activity", label: "Activity Log", icon: BookOpen },
   { id: "board", label: "Board", icon: Columns3 },
   { id: "files", label: "Files", icon: FolderOpen },
   { id: "milestones", label: "Milestones", icon: Flag },
   { id: "team", label: "Team", icon: Users },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
-  { id: "activity", label: "Activity Log", icon: BookOpen },
   { id: "admin", label: "Admin Panel", icon: Shield },
 ];
 const NOTIF_LABEL = {
@@ -91,6 +91,30 @@ const validateFiles = (fileList) => {
     else accepted.push(f);
   }
   return { accepted, rejected };
+};
+
+// A bare domain like "link.com" or "google.com" is what people almost
+// always mean when they skip the protocol — auto-correct it to https://
+// rather than reject it and make them retype the whole thing. Anything
+// that already looks like a URL (has "://" anywhere) is left exactly as
+// typed, so this never mangles an intentional http://, a mailto:, etc.
+const normalizeUrl = (raw) => {
+  const trimmed = (raw || "").trim();
+  if (!trimmed || trimmed.includes("://")) return trimmed;
+  return `https://${trimmed}`;
+};
+
+// "Today" as a YYYY-MM-DD string in the USER'S OWN timezone. The obvious
+// new Date().toISOString().slice(0,10) is a real bug for anyone east of
+// UTC (Bhutan is UTC+6): after ~6pm UTC it's already "tomorrow" in
+// toISOString even though it's still today locally, so an entry logged
+// late on the 28th would save/display under the 29th. Building the string
+// from the local date components avoids that entirely.
+const localDateStr = (date = new Date()) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 };
 
 const dueMeta = (dateStr, status) => {
@@ -286,7 +310,7 @@ const Column = ({ stage, tasks, users, onOpen, onAdd, onComplete, onReopen, canM
 /* ------------------------------------------------------------------ */
 const emptyDraft = (status, users, currentUserId, projectId) => ({
   id: null, title: "", description: "", status: status || "todo", priority: "medium",
-  assigneeId: currentUserId || users[0]?.id || "", due: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10),
+  assigneeId: currentUserId || users[0]?.id || "", due: localDateStr(new Date(Date.now() + 3 * 86400000)),
   dueTime: "", subtasks: [], pendingLinks: [], pendingFiles: [], projectId: projectId || "",
 });
 
@@ -464,7 +488,7 @@ const Links = ({ workspaceId, projectId, taskId, canAttach }) => {
     setAdding(true);
     setError("");
     try {
-      const { link } = await api.addLink(workspaceId, projectId, taskId, label.trim(), url.trim());
+      const { link } = await api.addLink(workspaceId, projectId, taskId, label.trim(), normalizeUrl(url));
       setItems((prev) => [...prev, link]);
       setLabel("");
       setUrl("");
@@ -486,7 +510,7 @@ const Links = ({ workspaceId, projectId, taskId, canAttach }) => {
       for (const line of lines) {
         // "Label | https://..." or just a bare URL, label optional either way
         const [maybeLabel, maybeUrl] = line.includes("|") ? line.split("|").map((s) => s.trim()) : [null, line];
-        const finalUrl = maybeUrl || line;
+        const finalUrl = normalizeUrl(maybeUrl || line);
         const finalLabel = maybeLabel || (() => { try { return new URL(finalUrl).hostname.replace(/^www\./, ""); } catch { return finalUrl; } })();
         const { link } = await api.addLink(workspaceId, projectId, taskId, finalLabel, finalUrl);
         created.push(link);
@@ -732,7 +756,7 @@ const SubtaskLinksMini = ({ workspaceId, projectId, taskId, subtaskId, canManage
     if (!url.trim()) return;
     setBusy(true);
     try {
-      const { link } = await api.addSubtaskLink(workspaceId, projectId, taskId, subtaskId, label.trim(), url.trim());
+      const { link } = await api.addSubtaskLink(workspaceId, projectId, taskId, subtaskId, label.trim(), normalizeUrl(url));
       setItems((prev) => [...prev, link]);
       setLabel(""); setUrl("");
     } finally {
@@ -787,7 +811,7 @@ const NewSubtaskForm = ({ onAdd, onCancel }) => {
   const addLink = (e) => {
     e.preventDefault();
     if (!linkUrl.trim()) return;
-    setLinks((prev) => [...prev, { label: linkLabel.trim() || linkUrl.trim(), url: linkUrl.trim() }]);
+    setLinks((prev) => [...prev, { label: linkLabel.trim() || linkUrl.trim(), url: normalizeUrl(linkUrl) }]);
     setLinkLabel(""); setLinkUrl("");
   };
   const removeLink = (i) => setLinks((prev) => prev.filter((_, idx) => idx !== i));
@@ -980,7 +1004,7 @@ const PendingFilesLinks = ({ draft, setDraft }) => {
   const addLink = (e) => {
     e.preventDefault();
     if (!linkUrl.trim()) return;
-    setDraft({ ...draft, pendingLinks: [...draft.pendingLinks, { label: linkLabel.trim() || linkUrl.trim(), url: linkUrl.trim() }] });
+    setDraft({ ...draft, pendingLinks: [...draft.pendingLinks, { label: linkLabel.trim() || linkUrl.trim(), url: normalizeUrl(linkUrl) }] });
     setLinkLabel(""); setLinkUrl("");
   };
   const removeLink = (i) => setDraft({ ...draft, pendingLinks: draft.pendingLinks.filter((_, idx) => idx !== i) });
@@ -1112,7 +1136,8 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
             style={{ opacity: draft.id ? 0.7 : 1 }}
           >
             <option value="" disabled>Choose a project…</option>
-            {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            <option value="__general__">No Specific Project (General)</option>
+            {projects.filter((p) => p.name !== "General").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           {draft.id && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>A task's project is set when it's created and can't be changed afterward.</div>}
         </div>
@@ -1238,9 +1263,10 @@ function parseBulkText(text, members, defaultAssigneeId) {
   return tasks;
 }
 
-const BulkAddModal = ({ users, currentUserId, onClose, onSubmit }) => {
+const BulkAddModal = ({ users, projects, currentProjectId, currentUserId, onClose, onSubmit }) => {
   const [assigneeId, setAssigneeId] = useState(currentUserId || users[0]?.id || "");
-  const [due, setDue] = useState(new Date().toISOString().slice(0, 10));
+  const [projectId, setProjectId] = useState(currentProjectId || "");
+  const [due, setDue] = useState(localDateStr());
   const [priority, setPriority] = useState("medium");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1251,10 +1277,11 @@ const BulkAddModal = ({ users, currentUserId, onClose, onSubmit }) => {
   const submit = async (e) => {
     e.preventDefault();
     if (parsed.length === 0) return;
+    if (!projectId) { setError("Choose which project these tasks belong to."); return; }
     setBusy(true);
     setError("");
     try {
-      await onSubmit({ tasks: parsed.map((t) => ({ title: t.title, assigneeId: t.assigneeId, subtasks: t.subtasks })), due, priority });
+      await onSubmit({ tasks: parsed.map((t) => ({ title: t.title, assigneeId: t.assigneeId, subtasks: t.subtasks })), due, priority, projectId });
       onClose();
     } catch (err) {
       setError(err.message);
@@ -1279,6 +1306,15 @@ const BulkAddModal = ({ users, currentUserId, onClose, onSubmit }) => {
         </div>
 
         <form onSubmit={submit}>
+          <div style={{ marginBottom: 14 }}>
+            <label className="tfh-label">Project <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(all tasks below go here)</span></label>
+            <select className="tfh-input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+              <option value="" disabled>Choose a project…</option>
+              <option value="__general__">No Specific Project (General)</option>
+              {projects.filter((p) => p.name !== "General").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
             <div>
               <label className="tfh-label">Default assignee <span style={{ textTransform: "none", fontWeight: 400 }}>(for lines with no name)</span></label>
@@ -1571,12 +1607,13 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, onOpenF
   const [teamLogs, setTeamLogs] = useState([]); // wide range: last 30 days through today
   const [logsLoading, setLogsLoading] = useState(true);
   const [teamTab, setTeamTab] = useState("today");
+  const [showPast, setShowPast] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLogsLoading(true);
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const rangeStart = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const todayStr = localDateStr();
+    const rangeStart = localDateStr(new Date(Date.now() - 30 * 86400000));
     Promise.all([api.getMyActivityLogs(workspaceId), api.getTeamActivityLogs(workspaceId, rangeStart, todayStr)])
       .then(([mine, team]) => {
         if (cancelled) return;
@@ -1599,7 +1636,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, onOpenF
     }
   };
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = localDateStr();
   const doneCount = tasks.filter((t) => t.status === "done").length;
   const activeCount = tasks.filter((t) => t.status === "todo").length;
   const overdue = tasks.filter((t) => t.status !== "done" && dueMeta(t.due, t.status).label.includes("overdue"));
@@ -1609,14 +1646,56 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, onOpenF
     .filter((t) => t.assigneeId === currentUser?.id && t.status !== "done" && t.due && t.due > todayStr)
     .sort((a, b) => new Date(a.due) - new Date(b.due))
     .slice(0, 6);
+  // "Pending works" — my tasks that are past due but still not done. These
+  // are the things that have slipped and need catching up on, distinct from
+  // "upcoming" (future) and "today".
+  const myPending = [...tasks]
+    .filter((t) => t.assigneeId === currentUser?.id && t.status !== "done" && t.due && t.due < todayStr)
+    .sort((a, b) => new Date(b.due) - new Date(a.due));
   const myTodayEntry = myLogs.find((l) => l.entryDate === todayStr);
   const myAgenda = mergeAgenda(myTasksToday, myTodayEntry?.content || []);
+
+  // Past activities: my completed tasks + my logged activity from before
+  // today, newest first — shown only when the "Show past" filter is on.
+  const myPastItems = buildPastItems(
+    [...tasks].filter((t) => t.assigneeId === currentUser?.id && t.status === "done" && t.due && t.due < todayStr).sort((a, b) => new Date(b.due) - new Date(a.due)).slice(0, 15),
+    myLogs.filter((l) => l.entryDate < todayStr)
+  ).slice(0, 20);
 
   const isManager = currentUser?.role === "admin" || currentUser?.role === "lead";
 
   const mineColumn = (
     <div style={{ display: "flex", flexDirection: "column", gap: 18, flex: "1 1 45%", minWidth: 0 }}>
-      <AgendaCard title="My today's activities" items={myAgenda} onOpen={onOpen} emptyText="Nothing scheduled or logged for today yet." />
+      <div className="tfh-card" style={{ padding: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>{showPast ? "My past activities" : "My today's activities"}</span>
+          <button
+            onClick={() => setShowPast((s) => !s)}
+            className="tfh-btn tfh-btn-ghost"
+            style={{ fontSize: 11, padding: "3px 9px", background: showPast ? "var(--accent-soft)" : "transparent", color: showPast ? "var(--accent)" : "var(--text-dim)" }}
+          >
+            {showPast ? "Show today" : "Show past"}
+          </button>
+        </div>
+        {showPast ? (
+          myPastItems.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing in the past 30 days.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              {myPastItems.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} />)}
+            </div>
+          )
+        ) : (
+          myAgenda.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing scheduled or logged for today yet.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              {myAgenda.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} />)}
+            </div>
+          )
+        )}
+      </div>
+
       <div className="tfh-card" style={{ padding: 18 }}>
         <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>Upcoming works</div>
         {myUpcoming.length === 0 ? (
@@ -1626,6 +1705,26 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, onOpenF
             {myUpcoming.map((t) => (
               <div key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: "pointer" }}>
                 <span className="tfh-mono" style={{ fontSize: 11, color: "var(--text-faint)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
+                <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
+                <PriorityChip level={t.priority} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="tfh-card" style={{ padding: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>Pending works</span>
+          {myPending.length > 0 && <span className="tfh-chip" style={{ fontSize: 10, background: "var(--pri-high)", color: "#fff" }}>{myPending.length}</span>}
+        </div>
+        {myPending.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing overdue — you're all caught up.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {myPending.map((t) => (
+              <div key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: "pointer" }}>
+                <span className="tfh-mono" style={{ fontSize: 11, color: "var(--pri-high)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
                 <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
                 <PriorityChip level={t.priority} />
               </div>
@@ -1822,7 +1921,10 @@ const BoardView = ({ tasks, users, projects, onOpen, onComplete, onReopen, onAdd
       if (statusFilter === "overdue" && !(t.status !== "done" && dueMeta(t.due, t.status).label.includes("overdue"))) return false;
       return true;
     })
-    .sort((a, b) => `${a.due || "9999"} ${a.dueTime || "99:99"}`.localeCompare(`${b.due || "9999"} ${b.dueTime || "99:99"}`));
+    // Sorted so the LATEST time sits at the top of the column and the
+    // earliest at the bottom (per explicit request: "early time bottom,
+    // late time on top"). Tasks with no date/time sort to the very bottom.
+    .sort((a, b) => `${b.due || "0000"} ${b.dueTime || "00:00"}`.localeCompare(`${a.due || "0000"} ${a.dueTime || "00:00"}`));
 
   const STATUS_QUICK_FILTERS = [
     { id: "all", label: "All" },
@@ -2231,7 +2333,7 @@ const CalendarView = ({ tasks, users, onOpen, workspaceId, canManage }) => {
   const month = cursor.getMonth();
   const firstDow = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = localDateStr();
 
   const cells = [];
   for (let i = 0; i < firstDow; i++) cells.push(null);
@@ -2465,7 +2567,7 @@ const TextBlockLinks = ({ links, onChange, readOnly }) => {
   const add = (e) => {
     e.preventDefault();
     if (!url.trim()) return;
-    onChange([...links, { label: label.trim() || url.trim(), url: url.trim() }]);
+    onChange([...links, { label: label.trim() || url.trim(), url: normalizeUrl(url) }]);
     setLabel(""); setUrl("");
   };
   const remove = (i) => onChange(links.filter((_, idx) => idx !== i));
@@ -2567,7 +2669,7 @@ const BlockEditor = ({ content, setContent, readOnly, projects }) => {
       {content.length === 0 && readOnly && <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Nothing logged for this day.</div>}
       {!readOnly && (
         <div style={{ display: "flex", gap: 8 }}>
-          <button type="button" onClick={addText} className="tfh-btn" style={{ fontSize: 12 }}><Plus size={12} /> Add text</button>
+          <button type="button" onClick={addText} className="tfh-btn" style={{ fontSize: 12 }}><Plus size={12} /> Add activity</button>
           <button type="button" onClick={addTable} className="tfh-btn" style={{ fontSize: 12 }}><TableIcon size={12} /> Add table</button>
         </div>
       )}
@@ -2575,8 +2677,105 @@ const BlockEditor = ({ content, setContent, readOnly, projects }) => {
   );
 };
 
+const ActivityComments = ({ workspaceId, logId, currentUser, initialCount }) => {
+  const [open, setOpen] = useState(false);
+  const [comments, setComments] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [body, setBody] = useState("");
+  const [posting, setPosting] = useState(false);
+  const [count, setCount] = useState(initialCount || 0);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const { comments: rows } = await api.getActivityLogComments(workspaceId, logId);
+      setComments(rows);
+      setCount(rows.length);
+      setLoaded(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !loaded) load();
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!body.trim()) return;
+    setPosting(true);
+    try {
+      const { comment } = await api.addActivityLogComment(workspaceId, logId, body.trim());
+      setComments((prev) => [...prev, comment]);
+      setCount((c) => c + 1);
+      setBody("");
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const remove = async (commentId) => {
+    await api.deleteActivityLogComment(workspaceId, logId, commentId);
+    setComments((prev) => prev.filter((c) => c.id !== commentId));
+    setCount((c) => Math.max(0, c - 1));
+  };
+
+  const isManager = currentUser?.role === "admin" || currentUser?.role === "lead";
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+      <button
+        onClick={toggle}
+        className="tfh-btn tfh-btn-ghost"
+        style={{ fontSize: 11.5, padding: "3px 8px", color: "var(--text-dim)" }}
+      >
+        <MessageSquare size={12} /> {count > 0 ? `${count} comment${count === 1 ? "" : "s"}` : "Comment"}
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+          {loading ? (
+            <div style={{ fontSize: 11.5, color: "var(--text-faint)", paddingLeft: 4 }}>Loading…</div>
+          ) : (
+            comments.map((c) => {
+              const mine = c.authorId === currentUser?.id;
+              return (
+                <div key={c.id} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <Avatar member={{ name: c.authorName, color: c.authorColor, initials: c.authorInitials }} size={20} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>{mine ? "You" : c.authorName}</span>
+                      <span style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{new Date(c.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
+                      {(mine || isManager) && (
+                        <button type="button" onClick={() => remove(c.id)} className="tfh-btn tfh-btn-ghost" style={{ padding: 2, marginLeft: "auto" }} aria-label="Delete comment"><X size={10} /></button>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.4 }}>{c.body}</div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+
+          <form onSubmit={submit} style={{ display: "flex", gap: 6, marginTop: 4 }}>
+            <input
+              className="tfh-input" style={{ fontSize: 12 }} placeholder="Write a comment…"
+              value={body} onChange={(e) => setBody(e.target.value)}
+            />
+            <button className="tfh-btn tfh-btn-accent" disabled={posting || !body.trim()} style={{ flexShrink: 0 }}>{posting ? "…" : "Post"}</button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [selectedDate, setSelectedDate] = useState(() => localDateStr());
   const [myLogs, setMyLogs] = useState([]);
   const [content, setContent] = useState([]);
   const [tab, setTab] = useState("mine");
@@ -2671,6 +2870,11 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
     }
   };
 
+  // The top-level "Add activity" button appends a fresh activity block —
+  // same shape BlockEditor's own "Add activity" uses, kept here so the
+  // button at the top works without scrolling down to the editor's buttons.
+  const addTopActivity = () => setContent((prev) => [...prev, { type: "text", text: "", time: "", links: [], projectId: "" }]);
+
   const groupedByDate = {};
   teamLogs.forEach((l) => { (groupedByDate[l.entryDate] = groupedByDate[l.entryDate] || []).push(l); });
 
@@ -2682,18 +2886,24 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>
-        <button className={`tfh-btn ${tab === "mine" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("mine")}>My log</button>
-        <button className={`tfh-btn ${tab === "team" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("team")}>Team log</button>
+        <button className={`tfh-btn ${tab === "mine" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("mine")}>My Log</button>
+        <button className={`tfh-btn ${tab === "team" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("team")}>Team Log</button>
       </div>
 
       {tab === "mine" ? (
         <>
           <div className="tfh-card" style={{ padding: 20 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-              <input type="date" className="tfh-input" style={{ width: "auto" }} value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} max={new Date().toISOString().slice(0, 10)} />
+              <input type="date" className="tfh-input" style={{ width: "auto" }} value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} max={localDateStr()} />
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {saved && <span style={{ fontSize: 12, color: "var(--stage-done)" }}>Saved</span>}
-                <button className="tfh-btn tfh-btn-accent" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save entry"}</button>
+                {/* Add activity is always available at the top (no scrolling
+                    to reach it). Save entry only appears once there's actually
+                    something to save — an empty log has nothing to store. */}
+                <button className="tfh-btn tfh-btn-accent" onClick={addTopActivity}><Plus size={14} /> Add activity</button>
+                {content.length > 0 && (
+                  <button className="tfh-btn" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save entry"}</button>
+                )}
               </div>
             </div>
             <BlockEditor content={content} setContent={setContent} projects={projects} />
@@ -2763,6 +2973,7 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
                         <span style={{ fontSize: 13, fontWeight: 600 }}>{l.userName}</span>
                       </div>
                       <BlockEditor content={l.content} setContent={() => {}} readOnly projects={projects} />
+                      <ActivityComments workspaceId={workspaceId} logId={l.id} currentUser={currentUser} initialCount={l.commentCount} />
                     </div>
                   ))}
                 </div>
@@ -2875,7 +3086,7 @@ const LinksList = ({ links, canManage, onAdd, onRemove, compact }) => {
     setBusy(true);
     setError("");
     try {
-      await onAdd(label.trim(), url.trim());
+      await onAdd(label.trim(), normalizeUrl(url));
       setLabel(""); setUrl("");
     } catch (err) {
       setError(err.message);
@@ -3256,7 +3467,7 @@ const MilestonesView = ({ workspaceId, projectId, project, canManage, isAdmin, u
   const addNewLink = (e) => {
     e.preventDefault();
     if (!newLinkUrl.trim()) return;
-    setNewLinks((prev) => [...prev, { label: newLinkLabel.trim() || newLinkUrl.trim(), url: newLinkUrl.trim() }]);
+    setNewLinks((prev) => [...prev, { label: newLinkLabel.trim() || newLinkUrl.trim(), url: normalizeUrl(newLinkUrl) }]);
     setNewLinkLabel(""); setNewLinkUrl("");
   };
   const removeNewLink = (i) => setNewLinks((prev) => prev.filter((_, idx) => idx !== i));
@@ -4088,7 +4299,14 @@ function Workspace() {
       // payload, then use the original draft.subtasks (which still has them)
       // to fire the actual uploads once each subtask has a real id.
       const cleanSubtasks = draft.subtasks.map(({ pendingLinks, pendingFiles, ...s }) => s);
-      const taskProjectId = draft.projectId;
+      // "No Specific Project (General)" is a sentinel in the dropdown —
+      // resolve it to the workspace's real, reusable General project here
+      // (created on first use), so the task still gets a valid project id.
+      let taskProjectId = draft.projectId;
+      if (taskProjectId === "__general__") {
+        const { projectId: generalId } = await api.ensureGeneralProject(currentId);
+        taskProjectId = generalId;
+      }
       let savedTask;
       let taskId;
 
@@ -4157,6 +4375,9 @@ function Workspace() {
       }
 
       setDraft(null);
+      // If this task created the General project on the fly, make sure the
+      // projects list reflects it right away (sidebar, Board filter, etc.).
+      if (draft.projectId === "__general__") refreshProjects();
     } catch (err) {
       setSaveError(err.message || "Something went wrong saving this task. Please try again.");
     } finally {
@@ -4171,9 +4392,15 @@ function Workspace() {
     setDraft(null);
   };
 
-  const bulkAddTasks = async ({ tasks, due, priority }) => {
-    const { tasks: created } = await api.createTasksBulk(currentId, projectId, { tasks, due, priority });
+  const bulkAddTasks = async ({ tasks, due, priority, projectId: chosenProjectId }) => {
+    let targetProject = chosenProjectId;
+    if (targetProject === "__general__") {
+      const { projectId: generalId } = await api.ensureGeneralProject(currentId);
+      targetProject = generalId;
+    }
+    const { tasks: created } = await api.createTasksBulk(currentId, targetProject, { tasks, due, priority });
     setTasks((prev) => [...prev, ...created]);
+    if (chosenProjectId === "__general__") refreshProjects();
   };
 
   const moveTask = async (id, status) => {
@@ -4357,7 +4584,7 @@ function Workspace() {
       </div>
 
       {draft && <TaskDialog draft={draft} setDraft={setDraft} users={users} projects={projects} onClose={closeDialog} onSave={saveDraft} onDelete={deleteTask} saving={saving} saveError={saveError} uploadPhase={uploadPhase} isWorkspaceManager={canManage} workspaceId={currentId} currentUserId={user.id} />}
-      {bulkAddOpen && <BulkAddModal users={users} currentUserId={user.id} onClose={() => setBulkAddOpen(false)} onSubmit={bulkAddTasks} />}
+      {bulkAddOpen && <BulkAddModal users={users} projects={projects} currentProjectId={projectId} currentUserId={user.id} onClose={() => setBulkAddOpen(false)} onSubmit={bulkAddTasks} />}
     </div>
   );
 }

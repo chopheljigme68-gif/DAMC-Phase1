@@ -1,12 +1,14 @@
 const express = require("express");
 const fs = require("fs");
 const {
-  getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog, getActivityLogByDate,
+  getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog, getActivityLogByDate, getActivityLogById,
+  getCommentsForActivityLog, addActivityLogComment, getActivityLogCommentById, deleteActivityLogComment,
   getAttachmentsForActivityLog, getActivityLogAttachmentById, addActivityLogAttachment, deleteActivityLogAttachment,
 } = require("../db");
 const { authenticate } = require("../auth");
 const { requireWorkspaceMember } = require("../middleware/workspace");
 const { activityLogUpload } = require("../utils/upload");
+const { notify } = require("../utils/notify");
 
 const router = express.Router({ mergeParams: true });
 router.use(authenticate, requireWorkspaceMember);
@@ -172,6 +174,60 @@ router.delete("/:date/attachments/:attachmentId", async (req, res, next) => {
     if (attachment && attachment.activityLogId === log.id && fs.existsSync(attachment.storagePath)) {
       fs.unlink(attachment.storagePath, () => {});
     }
+    res.status(204).end();
+  } catch (err) { next(err); }
+});
+
+// ---------------- comments on a day's entry ----------------
+// Keyed by the log's own id (not date), because you comment on OTHER
+// people's entries in the Team Log, not just your own. Any workspace
+// member can read and post; you can only delete your own comment (or an
+// admin/lead can, checked via role).
+
+router.get("/entry/:logId/comments", async (req, res, next) => {
+  try {
+    const log = await getActivityLogById(req.params.logId);
+    if (!log || log.workspaceId !== req.params.workspaceId) return res.status(404).json({ error: "Entry not found" });
+    res.json({ comments: await getCommentsForActivityLog(log.id) });
+  } catch (err) { next(err); }
+});
+
+router.post("/entry/:logId/comments", async (req, res, next) => {
+  try {
+    const { body } = req.body || {};
+    if (!body || !body.trim()) return res.status(400).json({ error: "Comment can't be empty" });
+    if (body.length > 4000) return res.status(400).json({ error: "Comment is too long" });
+
+    const log = await getActivityLogById(req.params.logId);
+    if (!log || log.workspaceId !== req.params.workspaceId) return res.status(404).json({ error: "Entry not found" });
+
+    const comment = await addActivityLogComment({ activityLogId: log.id, authorId: req.user.id, body: body.trim() });
+
+    // Let the person whose entry this is know someone responded — unless
+    // they're commenting on their own entry.
+    if (log.userId && log.userId !== req.user.id) {
+      await notify({
+        userId: log.userId, type: "activity_comment", taskId: null, taskTitle: null,
+        workspaceId: req.params.workspaceId, message: `${req.user.name} commented on your activity log for ${log.entryDate}`,
+      });
+    }
+    res.status(201).json({ comment });
+  } catch (err) { next(err); }
+});
+
+router.delete("/entry/:logId/comments/:commentId", async (req, res, next) => {
+  try {
+    const log = await getActivityLogById(req.params.logId);
+    if (!log || log.workspaceId !== req.params.workspaceId) return res.status(404).json({ error: "Entry not found" });
+
+    const comment = await getActivityLogCommentById(req.params.commentId);
+    if (!comment || comment.activityLogId !== log.id) return res.status(404).json({ error: "Comment not found" });
+
+    const isManager = req.membership?.role === "admin" || req.membership?.role === "lead";
+    if (comment.authorId !== req.user.id && !isManager) {
+      return res.status(403).json({ error: "You can only delete your own comments" });
+    }
+    await deleteActivityLogComment(comment.id);
     res.status(204).end();
   } catch (err) { next(err); }
 });

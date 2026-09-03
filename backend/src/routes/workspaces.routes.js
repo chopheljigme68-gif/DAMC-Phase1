@@ -2,7 +2,7 @@ const express = require("express");
 const {
   getWorkspacesForUser, createWorkspace, getWorkspaceById, getWorkspaceMembers, getUserByEmail,
   addWorkspaceMember, setMemberRole, updateMemberTitle, removeMember, countAdmins, createInvite, getMembership,
-  getWorkspaceWorkload, getHolidays, addHoliday, deleteHoliday, getHolidayById, getAllTasksForWorkspace,
+  getWorkspaceWorkload, getHolidays, addHoliday, deleteHoliday, getHolidayById, getAllTasksForWorkspace, getOrCreateGeneralProject,
 } = require("../db");
 const { authenticate } = require("../auth");
 const { requireWorkspaceMember, requireRole, requirePlatformAdmin } = require("../middleware/workspace");
@@ -201,6 +201,16 @@ router.delete("/:workspaceId/holidays/:holidayId", authenticate, requireWorkspac
 router.get("/:workspaceId/tasks", authenticate, requireWorkspaceMember, async (req, res, next) => {
   try {
     res.json({ tasks: await getAllTasksForWorkspace(req.params.workspaceId) });
+  } catch (err) { next(err); }
+});
+
+// Get-or-create the workspace's "General" project (for tasks with no
+// specific project). Open to any member, since any member can create a
+// task and therefore may need to file one under General.
+router.post("/:workspaceId/general-project", authenticate, requireWorkspaceMember, async (req, res, next) => {
+  try {
+    const projectId = await getOrCreateGeneralProject(req.params.workspaceId, req.user.id);
+    res.json({ projectId });
   } catch (err) { next(err); }
 });
 

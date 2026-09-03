@@ -583,3 +583,15 @@ CREATE TABLE IF NOT EXISTS activity_log_attachments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_activity_log_attachments_log ON activity_log_attachments(activity_log_id);
+
+/* Comments on a day's activity-log entry — so a supervisor or teammate can
+   respond to what someone logged, shown right under that person's entry in
+   the Team Log rather than buried out of sight. */
+CREATE TABLE IF NOT EXISTS activity_log_comments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  activity_log_id UUID NOT NULL REFERENCES activity_logs(id) ON DELETE CASCADE,
+  author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_activity_log_comments_log ON activity_log_comments(activity_log_id, created_at ASC);

@@ -105,6 +105,7 @@ export const api = {
 
   getHolidays: (workspaceId) => request(`/workspaces/${workspaceId}/holidays`),
   getAllTasks: (workspaceId) => request(`/workspaces/${workspaceId}/tasks`),
+  ensureGeneralProject: (workspaceId) => request(`/workspaces/${workspaceId}/general-project`, { method: "POST" }),
   addHoliday: (workspaceId, date, name) => request(`/workspaces/${workspaceId}/holidays`, { method: "POST", body: { date, name } }),
   deleteHoliday: (workspaceId, holidayId) => request(`/workspaces/${workspaceId}/holidays/${holidayId}`, { method: "DELETE" }),
 
@@ -114,6 +115,10 @@ export const api = {
   saveActivityLog: (workspaceId, date, content) => request(`/workspaces/${workspaceId}/activity-log/${date}`, { method: "PUT", body: { content } }),
 
   getActivityLogAttachments: (workspaceId, date) => request(`/workspaces/${workspaceId}/activity-log/${date}/attachments`),
+
+  getActivityLogComments: (workspaceId, logId) => request(`/workspaces/${workspaceId}/activity-log/entry/${logId}/comments`),
+  addActivityLogComment: (workspaceId, logId, body) => request(`/workspaces/${workspaceId}/activity-log/entry/${logId}/comments`, { method: "POST", body: { body } }),
+  deleteActivityLogComment: (workspaceId, logId, commentId) => request(`/workspaces/${workspaceId}/activity-log/entry/${logId}/comments/${commentId}`, { method: "DELETE" }),
   deleteActivityLogAttachment: (workspaceId, date, attachmentId) =>
     request(`/workspaces/${workspaceId}/activity-log/${date}/attachments/${attachmentId}`, { method: "DELETE" }),
   uploadActivityLogAttachment: async (workspaceId, date, file) => {

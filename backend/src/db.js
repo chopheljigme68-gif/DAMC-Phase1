@@ -306,6 +306,25 @@ async function createProject({ workspaceId, name, description, deadline, startDa
   return project;
 }
 
+// The safe "no specific project" option: a single reusable per-workspace
+// project literally named "General". Tasks that don't belong to a real
+// project land here instead of needing a nullable FK and new routing
+// everywhere. Idempotent — created once, reused forever after. The name is
+// matched case-sensitively and exactly, so a user's own project called
+// "General Stuff" won't collide with it.
+async function getOrCreateGeneralProject(workspaceId, createdBy) {
+  const existing = await pool.query(
+    `SELECT id FROM projects WHERE workspace_id = $1 AND name = 'General' ORDER BY created_at ASC LIMIT 1`,
+    [workspaceId]
+  );
+  if (existing.rows[0]) return existing.rows[0].id;
+  const project = await createProject({
+    workspaceId, name: "General", description: "Tasks not tied to a specific project.",
+    deadline: null, startDate: null, createdBy, memberIds: [],
+  });
+  return project.id;
+}
+
 async function getProjectMembers(projectId) {
   const { rows } = await pool.query(
     `SELECT u.id, u.name, u.color, u.initials,
@@ -1039,7 +1058,8 @@ async function getTeamActivityLogs(workspaceId, { from, to } = {}) {
   if (to) { params.push(to); where += ` AND al.entry_date <= $${params.length}`; }
   const { rows } = await pool.query(
     `SELECT al.id, al.user_id AS "userId", u.name AS "userName", u.color AS "userColor", u.initials AS "userInitials",
-            to_char(al.entry_date, 'YYYY-MM-DD') AS "entryDate", al.content, al.updated_at AS "updatedAt"
+            to_char(al.entry_date, 'YYYY-MM-DD') AS "entryDate", al.content, al.updated_at AS "updatedAt",
+            (SELECT count(*)::int FROM activity_log_comments c WHERE c.activity_log_id = al.id) AS "commentCount"
      FROM activity_logs al JOIN users u ON u.id = al.user_id
      WHERE ${where} ORDER BY al.entry_date DESC, u.name ASC`,
     params
@@ -1116,6 +1136,41 @@ async function deleteActivityLogAttachment(id) {
   return a;
 }
 
+/* ==================== activity log comments ==================== */
+
+async function getCommentsForActivityLog(activityLogId) {
+  const { rows } = await pool.query(
+    `SELECT c.id, c.activity_log_id AS "activityLogId", c.author_id AS "authorId",
+            u.name AS "authorName", u.color AS "authorColor", u.initials AS "authorInitials",
+            c.body, c.created_at AS "createdAt"
+     FROM activity_log_comments c LEFT JOIN users u ON u.id = c.author_id
+     WHERE c.activity_log_id = $1 ORDER BY c.created_at ASC`,
+    [activityLogId]
+  );
+  return rows;
+}
+
+async function addActivityLogComment({ activityLogId, authorId, body }) {
+  const { rows } = await pool.query(
+    `INSERT INTO activity_log_comments (activity_log_id, author_id, body) VALUES ($1, $2, $3) RETURNING id`,
+    [activityLogId, authorId, body]
+  );
+  const all = await getCommentsForActivityLog(activityLogId);
+  return all.find((c) => c.id === rows[0].id);
+}
+
+async function getActivityLogCommentById(id) {
+  const { rows } = await pool.query(
+    `SELECT id, activity_log_id AS "activityLogId", author_id AS "authorId", body FROM activity_log_comments WHERE id = $1`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
+async function deleteActivityLogComment(id) {
+  await pool.query("DELETE FROM activity_log_comments WHERE id = $1", [id]);
+}
+
 /* ==================== profile ==================== */
 
 async function updateUserProfile(userId, { name }) {
@@ -1123,14 +1178,27 @@ async function updateUserProfile(userId, { name }) {
   return rows[0];
 }
 
+/* ==================== system health ==================== */
+
+// A genuine, timed round-trip to the database — not a simulated number.
+// Used by /api/health so "system performance" reflects something real:
+// how long the database actually took to answer, measured right here,
+// right now, not estimated or assumed.
+async function pingDb() {
+  const start = Date.now();
+  await pool.query("SELECT 1");
+  return Date.now() - start;
+}
+
 module.exports = {
   getUserById, getUserByEmail, createUser, updateUserPassword, ensurePlatformAdminFromEnv, updateUserAvatar, updateUserProfile,
+  pingDb,
   createPasswordReset, getValidPasswordReset, consumePasswordReset,
   getWorkspacesForUser, getWorkspaceById, createWorkspace,
   getMembership, getWorkspaceMembers, countAdmins, addWorkspaceMember, setMemberRole, updateMemberTitle, removeMember,
   getWorkspaceWorkload,
   createInvite, getPendingInvitesForEmail, acceptInvite,
-  getProjectsForWorkspace, getProjectById, createProject, deleteProject, setProjectComplete, setProjectLead, updateProject, getRoadmapData,
+  getProjectsForWorkspace, getProjectById, createProject, getOrCreateGeneralProject, deleteProject, setProjectComplete, setProjectLead, updateProject, getRoadmapData,
   getProjectMembers, addProjectMember, removeProjectMember,
   getMilestones, getMilestoneById, createMilestone, updateMilestone, deleteMilestoneById, reorderMilestone,
   addMilestoneLink, deleteMilestoneLink,
@@ -1145,6 +1213,7 @@ module.exports = {
   getDocumentsForProject, getDocumentById, addDocument, deleteDocument,
   getHolidays, addHoliday, deleteHoliday, getHolidayById,
   getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog, getActivityLogById, getActivityLogByDate,
+  getCommentsForActivityLog, addActivityLogComment, getActivityLogCommentById, deleteActivityLogComment,
   getAttachmentsForActivityLog, getActivityLogAttachmentById, addActivityLogAttachment, deleteActivityLogAttachment,
   getTasksDueInTwoDays, markDueReminderSent,
   getNotificationsForUser, createNotification, markNotificationRead, markAllRead,
