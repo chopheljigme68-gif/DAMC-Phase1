@@ -241,11 +241,12 @@ async function getProjectsForWorkspace(workspaceId) {
             p.completed_at AS "completedAt", p.completed_by AS "completedBy",
             p.created_by AS "createdBy", p.created_at AS "createdAt",
             p.lead_id AS "leadId", u.name AS "leadName", u.color AS "leadColor", u.initials AS "leadInitials",
+            p.position AS "position",
             (SELECT count(*)::int FROM tasks t WHERE t.project_id = p.id) AS "taskCount",
             (SELECT count(*)::int FROM tasks t WHERE t.project_id = p.id AND t.status = 'done') AS "doneCount"
      FROM projects p
      LEFT JOIN users u ON u.id = p.lead_id
-     WHERE p.workspace_id = $1 ORDER BY p.created_at ASC`,
+     WHERE p.workspace_id = $1 ORDER BY p.position ASC NULLS LAST, lower(p.name) ASC`,
     [workspaceId]
   );
   return rows;
@@ -283,6 +284,30 @@ async function updateProject(projectId, { name, description, deadline, startDate
   );
   if (!rows[0]) return null;
   return getProjectById(projectId);
+}
+
+// Persist a manual drag-reorder. Takes the ordered list of project ids and
+// writes each one's position by its index. Every update is constrained to
+// the given workspace, so an id from another workspace simply matches no
+// row and is ignored rather than being reordered in.
+async function reorderProjects(workspaceId, orderedIds) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (let i = 0; i < orderedIds.length; i++) {
+      await client.query(
+        "UPDATE projects SET position = $1 WHERE id = $2 AND workspace_id = $3",
+        [i, orderedIds[i], workspaceId]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+  return getProjectsForWorkspace(workspaceId);
 }
 
 async function createProject({ workspaceId, name, description, deadline, startDate, createdBy, memberIds }) {
@@ -1198,7 +1223,7 @@ module.exports = {
   getMembership, getWorkspaceMembers, countAdmins, addWorkspaceMember, setMemberRole, updateMemberTitle, removeMember,
   getWorkspaceWorkload,
   createInvite, getPendingInvitesForEmail, acceptInvite,
-  getProjectsForWorkspace, getProjectById, createProject, getOrCreateGeneralProject, deleteProject, setProjectComplete, setProjectLead, updateProject, getRoadmapData,
+  getProjectsForWorkspace, getProjectById, createProject, getOrCreateGeneralProject, deleteProject, setProjectComplete, setProjectLead, updateProject, reorderProjects, getRoadmapData,
   getProjectMembers, addProjectMember, removeProjectMember,
   getMilestones, getMilestoneById, createMilestone, updateMilestone, deleteMilestoneById, reorderMilestone,
   addMilestoneLink, deleteMilestoneLink,

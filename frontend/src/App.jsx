@@ -1563,25 +1563,48 @@ const AgendaCard = ({ title, items, onOpen, emptyText }) => (
 // Collapsed by default (name + a compact count), expandable on click — the
 // fix for "looks packed" once there are several team members: previously
 // every single person's full agenda rendered at once, stacking up fast.
-const TeamMemberAgenda = ({ member, items, onOpen, emptyText }) => {
+const TeamMemberAgenda = ({ member, items, onOpen, emptyText, onAssignTask, pendingCount }) => {
   const [expanded, setExpanded] = useState(false);
 
   return (
     <div className="tfh-card" style={{ padding: expanded ? 16 : "10px 14px" }}>
-      <button
-        onClick={() => setExpanded((e) => !e)}
-        style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-      >
-        <Avatar member={member} size={22} />
-        <span style={{ fontSize: 12.5, fontWeight: 700, flex: 1, textAlign: "left" }}>{member.name}</span>
-        <span style={{ fontSize: 11, color: "var(--text-faint)" }}>{items.length > 0 ? `${items.length} item${items.length === 1 ? "" : "s"}` : ""}</span>
-        {expanded ? <ChevronUp size={14} color="var(--text-faint)" /> : <ChevronDown size={14} color="var(--text-faint)" />}
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0, background: "none", border: "none", cursor: "pointer", padding: 0 }}
+        >
+          <Avatar member={member} size={22} />
+          <span style={{ fontSize: 12.5, fontWeight: 700, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.name}</span>
+        </button>
+        {/* Assign Task → opens Quick Add prefilled for this member */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onAssignTask(member); }}
+          className="tfh-btn tfh-btn-ghost"
+          style={{ fontSize: 11, padding: "3px 8px", flexShrink: 0 }}
+          title={`Assign a task to ${member.name}`}
+        >
+          <Plus size={12} /> Assign Task
+        </button>
+        {/* Bigger, red item count (the Chief asked for larger red numbers) */}
+        <button onClick={() => setExpanded((e) => !e)} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          {items.length > 0 && (
+            <span style={{ fontSize: 15, fontWeight: 800, color: "var(--pri-high)" }}>{items.length}</span>
+          )}
+          {expanded ? <ChevronUp size={14} color="var(--text-faint)" /> : <ChevronDown size={14} color="var(--text-faint)" />}
+        </button>
+      </div>
       {expanded && (
         <div className="tfh-expand-in" style={{ marginTop: 10 }}>
           {items.length > 0 ? (
             <div style={{ display: "flex", flexDirection: "column" }}>
-              {items.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} />)}
+              {items.map((item, i) => {
+                const overdue = item.kind === "task" && item.task.status !== "done" && dueMeta(item.task.due, item.task.status).label.includes("overdue");
+                return (
+                  <div key={i} style={overdue ? { borderLeft: "3px solid var(--pri-high)", background: "var(--pri-high-soft, rgba(179,38,30,0.08))", borderRadius: 6 } : undefined}>
+                    <AgendaRow item={item} onOpen={onOpen} />
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div style={{ fontSize: 11.5, color: "var(--text-faint)", padding: "0 8px" }}>{emptyText}</div>
@@ -1597,9 +1620,10 @@ const TEAM_TABS = [
   { id: "past", label: "Past" },
   { id: "today", label: "Today" },
   { id: "upcoming", label: "Upcoming" },
+  { id: "pending", label: "Pending" },
 ];
 
-const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject }) => {
+const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject, onAssignTask }) => {
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
   const [myLogs, setMyLogs] = useState([]);
@@ -1768,6 +1792,14 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
             .sort((a, b) => new Date(a.due) - new Date(b.due));
           items = buildUpcomingItems(theirUpcoming);
           emptyText = "Nothing upcoming.";
+        } else if (teamTab === "pending") {
+          // Pending = this member's overdue-but-not-done tasks, most overdue
+          // first. Shown here so a supervisor can see who's behind at a glance.
+          const theirPending = [...tasks]
+            .filter((t) => t.assigneeId === u.id && t.status !== "done" && t.due && t.due < todayStr)
+            .sort((a, b) => new Date(a.due) - new Date(b.due));
+          items = buildUpcomingItems(theirPending);
+          emptyText = "Nothing pending — all caught up.";
         } else {
           const theirPastTasks = tasks
             .filter((t) => t.assigneeId === u.id && t.status === "done" && t.due && t.due < todayStr)
@@ -1778,7 +1810,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
           emptyText = "Nothing in the past 30 days.";
         }
         if (items.length === 0 && logsLoading) return null; // avoid a flash of empty state while still loading
-        return <TeamMemberAgenda key={u.id} member={u} items={items} onOpen={onOpen} emptyText={emptyText} />;
+        return <TeamMemberAgenda key={u.id} member={u} items={items} onOpen={onOpen} emptyText={emptyText} onAssignTask={onAssignTask} />;
       })}
       {!logsLoading && users.filter((u) => u.id !== currentUser?.id).length === 0 && (
         <div className="tfh-card" style={{ padding: 18, textAlign: "center" }}>
@@ -4025,10 +4057,38 @@ const CreateWorkspaceScreen = () => {
 // pages need, so clicking a project here is the single way to move
 // between projects (previously this and a separate switcher dropdown
 // overlapped; consolidated into just this one).
-const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManage, onCreateProject }) => {
+const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManage, onCreateProject, onReorder }) => {
   const [showCompleted, setShowCompleted] = useState(false);
+  const [dragId, setDragId] = useState(null);
+  const [order, setOrder] = useState(null); // local optimistic order of active-project ids while dragging
+
   const active = projects.filter((p) => !p.completedAt);
   const completed = projects.filter((p) => p.completedAt);
+
+  // Apply the optimistic order if we have one, else the server order.
+  const orderedActive = order
+    ? order.map((id) => active.find((p) => p.id === id)).filter(Boolean)
+    : active;
+
+  const handleDragStart = (id) => { setDragId(id); if (!order) setOrder(active.map((p) => p.id)); };
+  const handleDragOver = (e, overId) => {
+    e.preventDefault();
+    if (!dragId || dragId === overId) return;
+    setOrder((prev) => {
+      const base = prev || active.map((p) => p.id);
+      const from = base.indexOf(dragId);
+      const to = base.indexOf(overId);
+      if (from === -1 || to === -1) return base;
+      const next = [...base];
+      next.splice(from, 1);
+      next.splice(to, 0, dragId);
+      return next;
+    });
+  };
+  const handleDrop = () => {
+    if (order && onReorder) onReorder(order); // persist; parent refreshes projects
+    setDragId(null);
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -4040,12 +4100,17 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
       >
         <FolderKanban size={13} /> All projects
       </button>
-      {active.map((p) => (
+      {orderedActive.map((p) => (
         <button
           key={p.id} onClick={() => onSelectProject(p.id)}
+          draggable={canManage}
+          onDragStart={() => handleDragStart(p.id)}
+          onDragOver={(e) => handleDragOver(e, p.id)}
+          onDrop={handleDrop}
+          onDragEnd={() => { setDragId(null); }}
           className={`tfh-nav-item ${activeFilter === p.id ? "active" : ""}`}
-          style={{ fontSize: 12.5, padding: "7px 10px" }}
-          title={p.name}
+          style={{ fontSize: 12.5, padding: "7px 10px", opacity: dragId === p.id ? 0.5 : 1, cursor: canManage ? "grab" : "pointer" }}
+          title={canManage ? `${p.name} — drag to reorder` : p.name}
         >
           <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--stage-progress)", flexShrink: 0 }} />
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
@@ -4348,6 +4413,8 @@ function Workspace() {
   };
 
   const openCreate = (status = "todo") => { setDraft(emptyDraft(status, users, user.id, projectId)); setSaveError(""); };
+  // Assign Task → new-task dialog prefilled with this member as assignee.
+  const openCreateFor = (member) => { setDraft({ ...emptyDraft("todo", users, member.id, projectId), assigneeId: member.id }); setSaveError(""); };
   const openEdit = (task) => { setDraft({ ...task, originalProjectId: task.projectId, subtasks: task.subtasks.map((s) => ({ ...s })) }); setSaveError(""); };
   const openEditById = (id) => { const t = tasks.find((x) => x.id === id); if (t) openEdit(t); };
   const closeDialog = () => { setDraft(null); setSaveError(""); };
@@ -4552,11 +4619,24 @@ function Workspace() {
       {/* Sidebar */}
       <div className={`tfh-sidebar ${mobileNavOpen ? "open" : ""}`} style={{ width: 216, borderRight: "1px solid var(--line)", padding: "20px 14px", display: "flex", flexDirection: "column", gap: 22, background: "var(--ink)" }}>
         <WorkspaceSwitcher />
+
+        {/* Dashboard sits at the very top; the PROJECTS block goes directly
+            beneath it, then the rest of the nav — per the Chief's requested
+            order (Dashboard, then Projects, then everything else). */}
+        <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          {visibleNav.filter((n) => n.id === "dashboard").map((n) => (
+            <button key={n.id} className={`tfh-nav-item ${view === n.id ? "active" : ""}`} onClick={() => { setView(n.id); setMobileNavOpen(false); }}>
+              <n.icon size={16} /> {n.label}
+            </button>
+          ))}
+        </nav>
+
         <ProjectsSidebarList
           projects={projects}
           activeFilter={projectFilter}
           canManage={canManage}
           onCreateProject={createProject}
+          onReorder={async (orderedIds) => { await api.reorderProjects(currentId, orderedIds); refreshProjects(); }}
           onSelectProject={(id) => {
             // Order matters: switchProject changes projectId, which fires the
             // sync effect that sets projectFilter from projectId. So switch
@@ -4572,7 +4652,7 @@ function Workspace() {
         />
 
         <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          {visibleNav.map((n) => (
+          {visibleNav.filter((n) => n.id !== "dashboard").map((n) => (
             <button key={n.id} className={`tfh-nav-item ${view === n.id ? "active" : ""}`} onClick={() => { setView(n.id); setMobileNavOpen(false); }}>
               <n.icon size={16} /> {n.label}
             </button>
@@ -4632,7 +4712,7 @@ function Workspace() {
         </div>
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
-          {view === "dashboard" && <DashboardView workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} hasProject={!!projectId} onCreateProject={createProject} />}
+          {view === "dashboard" && <DashboardView workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} hasProject={!!projectId} onCreateProject={createProject} onAssignTask={openCreateFor} />}
           {view === "board" && (
             <BoardView
               tasks={tasks} users={users} projects={projects} onOpen={openEdit} onComplete={completeTask} onReopen={reopenTask} onAdd={openCreate} onBulkAdd={() => setBulkAddOpen(true)} onCreateProject={createProject} canManage={canManage} currentUserId={user.id}

@@ -566,6 +566,9 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS lead_id UUID REFERENCES users(id) 
 -- a guess. The roadmap falls back to created_at when this is absent — new
 -- projects can set a real one going forward for a more accurate timeline.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS start_date DATE;
+-- Manual sort order for drag-to-reorder in the sidebar. Nullable: existing
+-- rows stay null and fall back to name ordering until first reordered.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS position INTEGER;
 
 /* ---------------- activity log attachments — files attached to a day's entry ---------------- */
 -- Time and links live inline in each text block's own JSON (content is

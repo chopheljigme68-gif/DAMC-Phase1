@@ -13,17 +13,16 @@ export function ProjectProvider({ children }) {
   const refresh = useCallback(async () => {
     if (!workspaceId) { setProjects([]); setCurrentId(null); return []; }
     const { projects } = await api.getProjects(workspaceId);
-    // Sort alphabetically (case-insensitive) so every consumer — the sidebar
-    // list, the task-dialog dropdown, the Board filter, Bulk add — shows
-    // projects in a predictable A-Z order rather than creation order.
-    const sorted = [...projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-    setProjects(sorted);
+    // The server already orders projects by manual position (when set) then
+    // alphabetically — so we trust that order here rather than re-sorting on
+    // the client, which would clobber a manual drag-reorder.
+    setProjects(projects);
     // Keep whatever project was previously selected (including the one
     // restored from localStorage on a fresh page load) as long as it still
     // exists in this workspace — only fall back to the first project if it
     // genuinely doesn't, instead of always resetting on every refresh.
-    setCurrentId((prev) => (prev && sorted.some((p) => p.id === prev) ? prev : sorted[0]?.id || null));
-    return sorted;
+    setCurrentId((prev) => (prev && projects.some((p) => p.id === prev) ? prev : projects[0]?.id || null));
+    return projects;
   }, [workspaceId]);
 
   useEffect(() => {

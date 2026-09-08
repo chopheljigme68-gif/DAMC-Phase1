@@ -1,7 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const {
-  getProjectsForWorkspace, createProject, deleteProject, getProjectById, setProjectComplete, setProjectLead, updateProject,
+  getProjectsForWorkspace, createProject, deleteProject, getProjectById, setProjectComplete, setProjectLead, updateProject, reorderProjects,
   getProjectMembers, addProjectMember, removeProjectMember, getMembership,
   getMilestones, getMilestoneById, createMilestone, updateMilestone, deleteMilestoneById, reorderMilestone,
   addMilestoneLink, deleteMilestoneLink,
@@ -33,6 +33,20 @@ router.post("/", requireRole("admin", "lead"), async (req, res, next) => {
     });
     broadcastProjectsChanged(req.params.workspaceId);
     res.status(201).json({ project, members: await getProjectMembers(project.id) });
+  } catch (err) { next(err); }
+});
+
+// Persist a manual drag-reorder of the sidebar project list. Manager-only,
+// since it changes shared workspace structure everyone sees.
+router.patch("/reorder", requireRole("admin", "lead"), async (req, res, next) => {
+  try {
+    const { orderedIds } = req.body || {};
+    if (!Array.isArray(orderedIds) || orderedIds.some((id) => typeof id !== "string")) {
+      return res.status(400).json({ error: "orderedIds must be an array of project ids" });
+    }
+    const projects = await reorderProjects(req.params.workspaceId, orderedIds);
+    broadcastProjectsChanged(req.params.workspaceId);
+    res.json({ projects });
   } catch (err) { next(err); }
 });
 

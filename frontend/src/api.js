@@ -60,6 +60,7 @@ export const api = {
 
   getProjects: (workspaceId) => request(`/workspaces/${workspaceId}/projects`),
   createProject: (workspaceId, payload) => request(`/workspaces/${workspaceId}/projects`, { method: "POST", body: payload }),
+  reorderProjects: (workspaceId, orderedIds) => request(`/workspaces/${workspaceId}/projects/reorder`, { method: "PATCH", body: { orderedIds } }),
   deleteProject: (workspaceId, projectId) => request(`/workspaces/${workspaceId}/projects/${projectId}`, { method: "DELETE" }),
   setProjectComplete: (workspaceId, projectId, complete) => request(`/workspaces/${workspaceId}/projects/${projectId}/complete`, { method: "PATCH", body: { complete } }),
   setProjectLead: (workspaceId, projectId, leadId) => request(`/workspaces/${workspaceId}/projects/${projectId}/lead`, { method: "PATCH", body: { leadId } }),
