@@ -2,6 +2,22 @@ import React, { useState } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 
+// Mirror of the backend's name formatter (backend/src/utils/names.js) so the
+// user sees the tidy-up live, before submitting — the server still
+// normalizes authoritatively, this is just the friendly preview.
+const formatName = (raw) => {
+  if (typeof raw !== "string") return raw;
+  const trimmed = raw.replace(/\s+/g, " ").trim();
+  if (!trimmed) return trimmed;
+  const fmtWord = (w) => {
+    if (!w) return w;
+    if (/[a-z][A-Z]/.test(w) || /^[a-z]+[A-Z]/.test(w)) return w;
+    if (w.length === 1) return w.toUpperCase();
+    return w[0].toUpperCase() + w.slice(1).toLowerCase();
+  };
+  return trimmed.split(" ").map((w) => w.split("-").map(fmtWord).join("-")).join(" ");
+};
+
 export default function Register() {
   const { register } = useAuth();
   const navigate = useNavigate();
@@ -19,7 +35,8 @@ export default function Register() {
     setError("");
     setBusy(true);
     try {
-      await register(name, email, password, title);
+      // Normalize on submit too, so what's sent matches what the user saw.
+      await register(formatName(name), email, password, title);
       navigate("/");
     } catch (err) {
       setError(err.message);
@@ -42,7 +59,12 @@ export default function Register() {
         </div>
 
         <label className="tfh-label" htmlFor="name">Name</label>
-        <input id="name" className="tfh-input" value={name} onChange={(e) => setName(e.target.value)} style={{ marginBottom: 14 }} required autoFocus={!!invitedEmail} />
+        <input
+          id="name" className="tfh-input" value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={() => setName((n) => formatName(n))}
+          style={{ marginBottom: 14 }} required autoFocus={!!invitedEmail}
+        />
 
         <label className="tfh-label" htmlFor="email">Email</label>
         <input

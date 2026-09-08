@@ -3,6 +3,7 @@ const fs = require("fs");
 const { getUserById, updateUserAvatar, updateUserProfile } = require("../db");
 const { authenticate } = require("../auth");
 const { avatarUpload } = require("../utils/upload");
+const { formatName } = require("../utils/names");
 
 const router = express.Router();
 
@@ -30,9 +31,10 @@ router.get("/:userId/avatar", authenticate, async (req, res, next) => {
 router.patch("/me", authenticate, async (req, res, next) => {
   try {
     const { name } = req.body || {};
-    if (!name || !name.trim()) return res.status(400).json({ error: "Name is required" });
-    if (name.trim().length > 120) return res.status(400).json({ error: "Keep the name under 120 characters" });
-    const user = await updateUserProfile(req.user.id, { name: name.trim() });
+    const cleanName = formatName(name || "");
+    if (!cleanName) return res.status(400).json({ error: "Name is required" });
+    if (cleanName.length > 120) return res.status(400).json({ error: "Keep the name under 120 characters" });
+    const user = await updateUserProfile(req.user.id, { name: cleanName });
     res.json({ user: publicUser(user) });
   } catch (err) { next(err); }
 });

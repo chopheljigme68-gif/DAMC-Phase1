@@ -30,11 +30,18 @@ const STAGES = [
   { id: "todo", label: "Tasks", color: "var(--stage-progress)" },
   { id: "done", label: "Completed", color: "var(--stage-done)" },
 ];
+// The Chief asked to drop Low/Medium/High and keep just one "Priority"
+// (urgent) flag. Rather than a destructive DB migration, we keep the
+// existing `priority` column but only ever use two values now: "high" for
+// urgent, "medium" for normal. Old rows with "low" still read fine (treated
+// as normal). PRIORITIES is kept for the rare place that still maps a raw
+// value to a colour.
 const PRIORITIES = {
-  low: { label: "Low", color: "var(--pri-low)" },
-  medium: { label: "Medium", color: "var(--pri-medium)" },
-  high: { label: "High", color: "var(--pri-high)" },
+  low: { label: "Normal", color: "var(--pri-low)" },
+  medium: { label: "Normal", color: "var(--pri-medium)" },
+  high: { label: "Urgent", color: "var(--pri-high)" },
 };
+const isUrgent = (level) => level === "high";
 const NAV = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "activity", label: "Activity Log", icon: BookOpen },
@@ -191,10 +198,14 @@ const Avatar = ({ member, size = 28 }) => {
 };
 
 const PriorityChip = ({ level }) => {
-  const p = PRIORITIES[level];
+  // Only urgent tasks get a chip now; normal tasks show nothing, since the
+  // three-level Low/Medium/High system was dropped in favour of a single
+  // "Urgent" flag.
+  if (!isUrgent(level)) return null;
+  const p = PRIORITIES.high;
   return (
     <span className="tfh-chip" style={{ background: `${p.color}1E`, color: p.color, borderColor: `${p.color}40` }}>
-      <Flag size={11} /> {p.label}
+      <Flag size={11} /> Urgent
     </span>
   );
 };
@@ -231,7 +242,7 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <span style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35, textDecoration: isDone ? "line-through" : "none", color: isDone ? "var(--text-dim)" : "var(--text)" }}>{task.title}</span>
+        <span style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35, color: isDone ? "var(--text-dim)" : "var(--text)" }}>{task.title}</span>
         {canModify && (
           <button
             onClick={(e) => { e.stopPropagation(); isDone ? onReopen(task.id) : onComplete(task.id); }}
@@ -551,7 +562,7 @@ const Links = ({ workspaceId, projectId, taskId, canAttach }) => {
           {items.map((l) => (
             <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", borderRadius: 8, background: "var(--raised)" }}>
               <Link2 size={14} color="var(--text-faint)" style={{ flexShrink: 0 }} />
-              <a href={l.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>
+              <a href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>
                 {l.label}
               </a>
               {canAttach && <button type="button" onClick={() => remove(l.id)} className="tfh-btn tfh-btn-ghost" style={{ padding: 5 }} aria-label="Remove link"><X size={13} color="var(--text-faint)" /></button>}
@@ -776,7 +787,7 @@ const SubtaskLinksMini = ({ workspaceId, projectId, taskId, subtaskId, canManage
           {items.map((l) => (
             <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 7px", borderRadius: 6, background: "var(--panel)" }}>
               <Link2 size={11} color="var(--text-faint)" />
-              <a href={l.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>{l.label}</a>
+              <a href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>{l.label}</a>
               {canManage && <button type="button" onClick={() => remove(l.id)} className="tfh-btn tfh-btn-ghost" style={{ padding: 2 }} aria-label="Remove"><X size={10} /></button>}
             </div>
           ))}
@@ -1131,15 +1142,14 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
         <div style={{ marginBottom: 14 }}>
           <label className="tfh-label">Project</label>
           <select
-            disabled={!!draft.id} className="tfh-input" value={draft.projectId}
+            disabled={draft.id && !canManage && !isOwnTask} className="tfh-input" value={draft.projectId}
             onChange={(e) => setDraft({ ...draft, projectId: e.target.value })}
-            style={{ opacity: draft.id ? 0.7 : 1 }}
           >
             <option value="" disabled>Choose a project…</option>
             <option value="__general__">No Specific Project (General)</option>
             {projects.filter((p) => p.name !== "General").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          {draft.id && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>A task's project is set when it's created and can't be changed afterward.</div>}
+          {draft.id && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>You can move this task to a different project if it was filed by mistake.</div>}
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
@@ -1151,9 +1161,17 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
           </div>
           <div>
             <label className="tfh-label">Priority</label>
-            <select disabled={!canEditFields} className="tfh-input" value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: e.target.value })} style={{ opacity: canEditFields ? 1 : 0.7 }}>
-              {Object.entries(PRIORITIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-            </select>
+            <button
+              type="button" disabled={!canEditFields}
+              onClick={() => setDraft({ ...draft, priority: isUrgent(draft.priority) ? "medium" : "high" })}
+              className="tfh-input"
+              style={{ display: "flex", alignItems: "center", gap: 8, cursor: canEditFields ? "pointer" : "default", opacity: canEditFields ? 1 : 0.7, textAlign: "left", color: isUrgent(draft.priority) ? "var(--pri-high)" : "var(--text-dim)" }}
+            >
+              <span className={`tfh-checkbox ${isUrgent(draft.priority) ? "checked" : ""}`} style={{ pointerEvents: "none" }}>
+                {isUrgent(draft.priority) && <Check size={11} color="#12141c" strokeWidth={3} />}
+              </span>
+              <Flag size={13} /> Mark as urgent
+            </button>
           </div>
           <div>
             <label className="tfh-label">Assignee</label>
@@ -1328,9 +1346,17 @@ const BulkAddModal = ({ users, projects, currentProjectId, currentUserId, onClos
             </div>
             <div>
               <label className="tfh-label">Priority</label>
-              <select className="tfh-input" value={priority} onChange={(e) => setPriority(e.target.value)}>
-                {Object.entries(PRIORITIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-              </select>
+              <button
+                type="button"
+                onClick={() => setPriority((pr) => isUrgent(pr) ? "medium" : "high")}
+                className="tfh-input"
+                style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", textAlign: "left", color: isUrgent(priority) ? "var(--pri-high)" : "var(--text-dim)" }}
+              >
+                <span className={`tfh-checkbox ${isUrgent(priority) ? "checked" : ""}`} style={{ pointerEvents: "none" }}>
+                  {isUrgent(priority) && <Check size={11} color="#12141c" strokeWidth={3} />}
+                </span>
+                <Flag size={13} /> Mark all as urgent
+              </button>
             </div>
           </div>
 
@@ -1447,33 +1473,6 @@ const NotificationBell = ({ notifications, onOpenTask, onMarkRead, onMarkAll, pe
 /* ------------------------------------------------------------------ */
 /* Dashboard view                                                        */
 /* ------------------------------------------------------------------ */
-const StatCard = ({ label, value, sub, accent, onClick }) => {
-  const [pop, setPop] = useState(false);
-  const prevValue = useRef(value);
-
-  useEffect(() => {
-    if (prevValue.current !== value) {
-      setPop(true);
-      const t = setTimeout(() => setPop(false), 320);
-      prevValue.current = value;
-      return () => clearTimeout(t);
-    }
-  }, [value]);
-
-  const Tag = onClick ? "button" : "div";
-  return (
-    <Tag
-      onClick={onClick}
-      className={`tfh-card tfh-fade-in ${onClick ? "tfh-card-interactive" : ""}`}
-      style={{ padding: 18, flex: 1, minWidth: 140, textAlign: "left", border: onClick ? undefined : undefined }}
-    >
-      <div className="tfh-label" style={{ marginBottom: 10 }}>{label}</div>
-      <div className={`tfh-display ${pop ? "tfh-number-pop" : ""}`} style={{ fontSize: 30, fontWeight: 600, color: accent || "var(--text)" }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 4 }}>{sub}</div>}
-    </Tag>
-  );
-};
-
 const TaskListMini = ({ title, items, users, onOpen, emptyText, showAssignee }) => (
   <div className="tfh-card" style={{ padding: 20 }}>
     <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>{title}</div>
@@ -1485,7 +1484,7 @@ const TaskListMini = ({ title, items, users, onOpen, emptyText, showAssignee }) 
           <button key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 8px", borderRadius: 10, background: "transparent", border: "none", color: "var(--text)", textAlign: "left" }}>
             <span style={{ width: 7, height: 7, borderRadius: 999, background: STAGES.find((s) => s.id === t.status).color, flexShrink: 0 }} />
             {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(t.dueTime)}</span>}
-            <span style={{ fontSize: 13.5, flex: 1, textDecoration: t.status === "done" ? "line-through" : "none", color: t.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{t.title}</span>
+            <span style={{ fontSize: 13.5, flex: 1, color: t.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{t.title}</span>
             <PriorityChip level={t.priority} />
             <span style={{ fontSize: 12, color: meta.tone, minWidth: 92, textAlign: "right" }}>{meta.label}</span>
             {showAssignee && <Avatar member={a} size={22} />}
@@ -1541,7 +1540,7 @@ const AgendaRow = ({ item, onOpen }) => (
       {item.time ? formatTimeLabel(item.time) : item.dateLabel || "Anytime"}
     </span>
     <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-      <span style={{ fontSize: 12.5, color: "var(--text)", textDecoration: item.kind === "task" && item.task.status === "done" ? "line-through" : "none" }}>{item.label}</span>
+      <span style={{ fontSize: 12.5, color: item.kind === "task" && item.task.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{item.label}</span>
       {item.kind === "task" && <PriorityChip level={item.task.priority} />}
       {item.kind === "activity" && <span className="tfh-chip" style={{ fontSize: 9.5, background: "var(--raised)", color: "var(--text-faint)" }}>Logged</span>}
     </div>
@@ -1600,7 +1599,7 @@ const TEAM_TABS = [
   { id: "upcoming", label: "Upcoming" },
 ];
 
-const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, onOpenFiltered, hasProject, onCreateProject }) => {
+const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject }) => {
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
   const [myLogs, setMyLogs] = useState([]);
@@ -1637,9 +1636,6 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, onOpenF
   };
 
   const todayStr = localDateStr();
-  const doneCount = tasks.filter((t) => t.status === "done").length;
-  const activeCount = tasks.filter((t) => t.status === "todo").length;
-  const overdue = tasks.filter((t) => t.status !== "done" && dueMeta(t.due, t.status).label.includes("overdue"));
 
   const myTasksToday = tasks.filter((t) => t.assigneeId === currentUser?.id && t.due === todayStr);
   const myUpcoming = [...tasks]
@@ -1733,15 +1729,6 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, onOpenF
         )}
       </div>
 
-      {/* Totals sit under "mine" specifically now, not centered above both
-          columns — a 2x2 grid since this column is narrower than a
-          full-width row would need. */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <StatCard label="Total tasks" value={tasks.length} sub="across all stages" onClick={() => onOpenFiltered("all")} />
-        <StatCard label="Active" value={activeCount} sub="not yet completed" accent="var(--stage-progress)" onClick={() => onOpenFiltered("active")} />
-        <StatCard label="Shipped" value={doneCount} sub="marked done" accent="var(--stage-done)" onClick={() => onOpenFiltered("shipped")} />
-        <StatCard label="Overdue" value={overdue.length} sub={overdue.length ? "needs attention" : "all clear"} accent={overdue.length ? "var(--pri-high)" : "var(--stage-done)"} onClick={() => onOpenFiltered("overdue")} />
-      </div>
     </div>
   );
 
@@ -1804,7 +1791,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, onOpenF
   return (
     <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 22 }}>
       <div>
-        <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>Dashboard</div>
+        <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>DAMC Collaboration Dashboard</div>
         <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</div>
       </div>
 
@@ -1913,7 +1900,7 @@ const BoardView = ({ tasks, users, projects, onOpen, onComplete, onReopen, onAdd
   const filtered = tasks
     .filter((t) => {
       if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
-      if (priorityFilter !== "all" && t.priority !== priorityFilter) return false;
+      if (priorityFilter === "urgent" && !isUrgent(t.priority)) return false;
       if (assigneeFilter !== "all" && t.assigneeId !== assigneeFilter) return false;
       if (projectFilter !== "all" && t.projectId !== projectFilter) return false;
       if (statusFilter === "active" && t.status !== "todo") return false;
@@ -1958,8 +1945,8 @@ const BoardView = ({ tasks, users, projects, onOpen, onComplete, onReopen, onAdd
         </select>
         {canManage && <NewProjectButton onCreateProject={onCreateProject} />}
         <select className="tfh-input" style={{ width: "auto" }} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
-          <option value="all">All priorities</option>
-          {Object.entries(PRIORITIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          <option value="all">All tasks</option>
+          <option value="urgent">Urgent only</option>
         </select>
         <select className="tfh-input" style={{ width: "auto" }} value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
           <option value="all">Everyone</option>
@@ -2577,7 +2564,7 @@ const TextBlockLinks = ({ links, onChange, readOnly }) => {
     return (
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
         {links.map((l, i) => (
-          <a key={i} href={l.url} target="_blank" rel="noreferrer" className="tfh-chip tfh-mono" style={{ background: "var(--accent-soft)", color: "var(--accent)", textDecoration: "none" }}>
+          <a key={i} href={normalizeUrl(l.url)} target="_blank" rel="noreferrer" className="tfh-chip tfh-mono" style={{ background: "var(--accent-soft)", color: "var(--accent)", textDecoration: "none" }}>
             <Link2 size={10} /> {l.label}
           </a>
         ))}
@@ -2609,7 +2596,7 @@ const TextBlockLinks = ({ links, onChange, readOnly }) => {
 const BlockEditor = ({ content, setContent, readOnly, projects }) => {
   const updateBlock = (i, next) => setContent((prev) => prev.map((b, idx) => (idx === i ? next : b)));
   const removeBlock = (i) => setContent((prev) => prev.filter((_, idx) => idx !== i));
-  const addText = () => setContent((prev) => [...prev, { type: "text", text: "", time: "", links: [], projectId: "" }]);
+  const addText = () => setContent((prev) => [...prev, { type: "text", text: "", time: "", links: [], projectId: "", notes: "" }]);
   const addTable = () => setContent((prev) => [...prev, { type: "table", rows: [["", ""], ["", ""]] }]);
   const projectName = (id) => projects.find((p) => p.id === id)?.name;
 
@@ -2619,7 +2606,7 @@ const BlockEditor = ({ content, setContent, readOnly, projects }) => {
         <div key={i}>
           {block.type === "text" ? (
             readOnly ? (
-              (block.text || (block.links || []).length > 0) && (
+              (block.text || block.notes || (block.links || []).length > 0) && (
                 <div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
                     {block.time && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(block.time)}</span>}
@@ -2630,6 +2617,7 @@ const BlockEditor = ({ content, setContent, readOnly, projects }) => {
                       </span>
                     )}
                   </div>
+                  {block.notes && <div style={{ fontSize: 12, color: "var(--text-dim)", fontStyle: "italic", marginTop: 3 }}>Notes: {block.notes}</div>}
                   <TextBlockLinks links={block.links || []} readOnly />
                 </div>
               )
@@ -2650,6 +2638,12 @@ const BlockEditor = ({ content, setContent, readOnly, projects }) => {
                     <button type="button" onClick={() => removeBlock(i)} className="tfh-btn tfh-btn-ghost" style={{ position: "absolute", top: 4, right: 4, padding: 3 }} aria-label="Remove"><X size={11} color="var(--text-faint)" /></button>
                   </div>
                 </div>
+                <input
+                  className="tfh-input" style={{ fontSize: 11.5, marginBottom: 8 }}
+                  placeholder="Notes from Activity (optional)"
+                  value={block.notes || ""} onChange={(e) => updateBlock(i, { ...block, notes: e.target.value })}
+                  aria-label="Notes from Activity"
+                />
                 <select
                   className="tfh-input" style={{ fontSize: 11.5, marginBottom: 8 }}
                   value={block.projectId || ""} onChange={(e) => updateBlock(i, { ...block, projectId: e.target.value })}
@@ -2789,6 +2783,8 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const [fileError, setFileError] = useState("");
+  const [activitySearch, setActivitySearch] = useState("");
+  const [popupActivity, setPopupActivity] = useState(null); // {time, text, notes, projectId, links} while adding via popup
 
   const loadMine = async () => {
     setLoading(true);
@@ -2870,10 +2866,31 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
     }
   };
 
-  // The top-level "Add activity" button appends a fresh activity block —
-  // same shape BlockEditor's own "Add activity" uses, kept here so the
-  // button at the top works without scrolling down to the editor's buttons.
-  const addTopActivity = () => setContent((prev) => [...prev, { type: "text", text: "", time: "", links: [], projectId: "" }]);
+  // "Add activity" now opens a focused popup (like Quick Add) instead of
+  // appending an inline field at the bottom that you'd have to scroll to.
+  const openActivityPopup = () => setPopupActivity({ time: "", text: "", notes: "", projectId: "", links: [] });
+
+  // Saving the popup appends the one activity to today's entry AND persists
+  // immediately, so the user doesn't then have to hunt for "Save entry".
+  const saveActivityPopup = async () => {
+    if (!popupActivity.text.trim()) { setPopupActivity(null); return; }
+    const block = { type: "text", ...popupActivity };
+    const nextContent = [...content, block];
+    setContent(nextContent);
+    setPopupActivity(null);
+    setSaving(true);
+    try {
+      const { log } = await api.saveActivityLog(workspaceId, selectedDate, nextContent);
+      setMyLogs((prev) => {
+        const others = prev.filter((l) => l.entryDate !== selectedDate);
+        return [...others, log].sort((a, b) => b.entryDate.localeCompare(a.entryDate));
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const groupedByDate = {};
   teamLogs.forEach((l) => { (groupedByDate[l.entryDate] = groupedByDate[l.entryDate] || []).push(l); });
@@ -2900,7 +2917,7 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
                 {/* Add activity is always available at the top (no scrolling
                     to reach it). Save entry only appears once there's actually
                     something to save — an empty log has nothing to store. */}
-                <button className="tfh-btn tfh-btn-accent" onClick={addTopActivity}><Plus size={14} /> Add activity</button>
+                <button className="tfh-btn tfh-btn-accent" onClick={openActivityPopup}><Plus size={14} /> Add activity</button>
                 {content.length > 0 && (
                   <button className="tfh-btn" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save entry"}</button>
                 )}
@@ -2938,21 +2955,36 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
           </div>
 
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Past entries</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>Past entries</div>
+              <div style={{ position: "relative", flex: "1 1 200px", maxWidth: 280 }}>
+                <Search size={13} color="var(--text-faint)" style={{ position: "absolute", left: 10, top: 9 }} />
+                <input className="tfh-input" style={{ paddingLeft: 30, fontSize: 12 }} placeholder="Search activities" value={activitySearch} onChange={(e) => setActivitySearch(e.target.value)} />
+              </div>
+            </div>
             {loading ? (
               <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Loading…</div>
-            ) : myLogs.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>No entries yet.</div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {myLogs.map((l) => (
-                  <button key={l.id} onClick={() => setSelectedDate(l.entryDate)} className="tfh-card" style={{ padding: "10px 14px", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", border: l.entryDate === selectedDate ? "1px solid var(--accent)" : undefined }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 600 }}>{new Date(l.entryDate + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
-                    <span style={{ fontSize: 11, color: "var(--text-faint)" }}>{l.content.length} {l.content.length === 1 ? "activity" : "activities"}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+            ) : (() => {
+              const q = activitySearch.trim().toLowerCase();
+              const visible = q
+                ? myLogs.filter((l) =>
+                    l.content.some((b) => b.type === "text" && ((b.text || "").toLowerCase().includes(q) || (b.notes || "").toLowerCase().includes(q)))
+                    || new Date(l.entryDate + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" }).toLowerCase().includes(q)
+                  )
+                : myLogs;
+              if (myLogs.length === 0) return <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>No entries yet.</div>;
+              if (visible.length === 0) return <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>No activities match “{activitySearch}”.</div>;
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {visible.map((l) => (
+                    <button key={l.id} onClick={() => setSelectedDate(l.entryDate)} className="tfh-card" style={{ padding: "10px 14px", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", border: l.entryDate === selectedDate ? "1px solid var(--accent)" : undefined }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 600 }}>{new Date(l.entryDate + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
+                      <span style={{ fontSize: 11, color: "var(--text-faint)" }}>{l.content.length} {l.content.length === 1 ? "activity" : "activities"}</span>
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </>
       ) : (
@@ -2980,6 +3012,36 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
               </div>
             ))
           )}
+        </div>
+      )}
+
+      {popupActivity && (
+        <div className="tfh-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setPopupActivity(null); }}>
+          <div className="tfh-card tfh-modal-card" style={{ width: "100%", maxWidth: 460, padding: 22 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <span className="tfh-display" style={{ fontSize: 19, fontWeight: 600 }}>Add activity</span>
+              <button className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={() => setPopupActivity(null)} aria-label="Close"><X size={16} /></button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <input type="time" className="tfh-input" style={{ width: 120, flexShrink: 0 }} value={popupActivity.time} onChange={(e) => setPopupActivity({ ...popupActivity, time: e.target.value })} aria-label="Time" />
+              <input autoFocus className="tfh-input" placeholder="What did you work on?" value={popupActivity.text} onChange={(e) => setPopupActivity({ ...popupActivity, text: e.target.value })} />
+            </div>
+
+            <label className="tfh-label">Notes from Activity <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional)</span></label>
+            <input className="tfh-input" style={{ marginBottom: 12 }} placeholder="Any notes" value={popupActivity.notes} onChange={(e) => setPopupActivity({ ...popupActivity, notes: e.target.value })} />
+
+            <label className="tfh-label">Project <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional)</span></label>
+            <select className="tfh-input" style={{ marginBottom: 18 }} value={popupActivity.projectId} onChange={(e) => setPopupActivity({ ...popupActivity, projectId: e.target.value })}>
+              <option value="">No specific project</option>
+              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+              <button className="tfh-btn" onClick={() => setPopupActivity(null)} disabled={saving}>Cancel</button>
+              <button className="tfh-btn tfh-btn-accent" onClick={saveActivityPopup} disabled={saving || !popupActivity.text.trim()}>{saving ? "Saving…" : "Add activity"}</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -3102,7 +3164,7 @@ const LinksList = ({ links, canManage, onAdd, onRemove, compact }) => {
           {links.map((l) => (
             <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: compact ? "5px 8px" : "6px 8px", borderRadius: 8, background: "var(--raised)" }}>
               <Link2 size={13} color="var(--text-faint)" style={{ flexShrink: 0 }} />
-              <a href={l.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>{l.label}</a>
+              <a href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>{l.label}</a>
               {canManage && <button type="button" onClick={() => onRemove(l.id)} className="tfh-btn tfh-btn-ghost" style={{ padding: 4 }} aria-label="Remove link"><X size={12} color="var(--text-faint)" /></button>}
             </div>
           ))}
@@ -4201,10 +4263,12 @@ function Workspace() {
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [projectFilter, setProjectFilter] = useState(projectId || "all");
-  // Switching projects in the sidebar re-focuses the Board on that project
-  // too — but once there, the Board's own dropdown can freely deviate from
-  // it (e.g. to "All projects") without fighting the sidebar for control.
-  useEffect(() => { setProjectFilter(projectId || "all"); }, [projectId]);
+  // Keep the Board filter in step with the sidebar's current project when it
+  // changes — but only when they've genuinely diverged, so this never fires
+  // redundantly and races the click handler that sets both at once.
+  useEffect(() => {
+    if (projectId && projectId !== projectFilter) setProjectFilter(projectId);
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [draft, setDraft] = useState(null);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
@@ -4283,7 +4347,7 @@ function Workspace() {
   };
 
   const openCreate = (status = "todo") => { setDraft(emptyDraft(status, users, user.id, projectId)); setSaveError(""); };
-  const openEdit = (task) => { setDraft({ ...task, subtasks: task.subtasks.map((s) => ({ ...s })) }); setSaveError(""); };
+  const openEdit = (task) => { setDraft({ ...task, originalProjectId: task.projectId, subtasks: task.subtasks.map((s) => ({ ...s })) }); setSaveError(""); };
   const openEditById = (id) => { const t = tasks.find((x) => x.id === id); if (t) openEdit(t); };
   const closeDialog = () => { setDraft(null); setSaveError(""); };
 
@@ -4322,8 +4386,15 @@ function Workspace() {
           : isOwnTask
             ? { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, due: draft.due, dueTime: draft.dueTime || null }
             : { status: draft.status };
-        await api.updateTask(currentId, taskProjectId, draft.id, patch);
-        const { task } = await api.setSubtasks(currentId, taskProjectId, draft.id, cleanSubtasks);
+        // If the project was changed (fixing a mis-file), include it — but
+        // the API call must still go to the ORIGINAL project's path, since
+        // that's where the task currently lives until the move lands.
+        const routeProjectId = draft.originalProjectId || taskProjectId;
+        if ((canManage || isOwnTask) && taskProjectId !== draft.originalProjectId) {
+          patch.projectId = taskProjectId;
+        }
+        await api.updateTask(currentId, routeProjectId, draft.id, patch);
+        const { task } = await api.setSubtasks(currentId, patch.projectId || routeProjectId, draft.id, cleanSubtasks);
         savedTask = task;
         taskId = draft.id;
       } else {
@@ -4486,8 +4557,14 @@ function Workspace() {
           canManage={canManage}
           onCreateProject={createProject}
           onSelectProject={(id) => {
+            // Order matters: switchProject changes projectId, which fires the
+            // sync effect that sets projectFilter from projectId. So switch
+            // FIRST, then set the filter — otherwise the effect runs last and
+            // could overwrite the filter we just set (the "clicked a project
+            // but its tasks don't show" symptom). For "all", there's nothing
+            // to switch to, so just set the filter directly.
+            if (id !== "all") switchProject(id);
             setProjectFilter(id);
-            if (id !== "all") switchProject(id); // also sets the "current project" Milestones/Files depend on
             setView("board");
             setMobileNavOpen(false);
           }}
@@ -4554,7 +4631,7 @@ function Workspace() {
         </div>
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
-          {view === "dashboard" && <DashboardView workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} onOpenFiltered={(filterId) => { setStatusFilter(filterId); setView("board"); }} hasProject={!!projectId} onCreateProject={createProject} />}
+          {view === "dashboard" && <DashboardView workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} hasProject={!!projectId} onCreateProject={createProject} />}
           {view === "board" && (
             <BoardView
               tasks={tasks} users={users} projects={projects} onOpen={openEdit} onComplete={completeTask} onReopen={reopenTask} onAdd={openCreate} onBulkAdd={() => setBulkAddOpen(true)} onCreateProject={createProject} canManage={canManage} currentUserId={user.id}

@@ -1,7 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const {
-  getTasks, getTaskById, createTask, updateTask, replaceSubtasks, deleteTask, getWorkspaceMembers, getSubtaskById,
+  getTasks, getTaskById, createTask, updateTask, replaceSubtasks, deleteTask, getWorkspaceMembers, getSubtaskById, getProjectById,
   getAttachmentsForTask, getAttachmentById, addAttachment, deleteAttachment,
   getCommentsForTask, addComment,
   getLinksForTask, addLink, getLinkById, deleteLink,
@@ -186,6 +186,17 @@ router.patch("/:id", async (req, res, next) => {
     });
     if (patch.assigneeId && !(await assertAssigneeIsMember(req.params.workspaceId, patch.assigneeId))) {
       return res.status(400).json({ error: "Assignee must be a member of this workspace" });
+    }
+    // Moving a task to a different project (fixing a mis-filed task). The
+    // target must be a real project in THIS workspace — never another
+    // workspace's — so a bad/foreign id can't smuggle a task across
+    // workspace boundaries.
+    if (req.body.projectId !== undefined && req.body.projectId !== existing.projectId) {
+      const target = await getProjectById(req.body.projectId);
+      if (!target || target.workspaceId !== req.params.workspaceId) {
+        return res.status(400).json({ error: "That project isn't in this workspace" });
+      }
+      patch.projectId = req.body.projectId;
     }
 
     const { task, prevStatus, prevAssignee } = await updateTask(req.params.id, patch);

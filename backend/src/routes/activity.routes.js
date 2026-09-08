@@ -42,6 +42,9 @@ function validateContent(content) {
       if (block.projectId !== undefined && block.projectId !== null && typeof block.projectId !== "string") {
         return "A text block's projectId is invalid";
       }
+      if (block.notes !== undefined && block.notes !== null && (typeof block.notes !== "string" || block.notes.length > 4000)) {
+        return "A text block's notes are invalid or too long";
+      }
     } else if (block.type === "table") {
       if (!Array.isArray(block.rows) || block.rows.length > 200) return "A table block has too many rows or is invalid";
       for (const row of block.rows) {

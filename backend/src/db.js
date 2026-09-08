@@ -620,7 +620,7 @@ async function updateTask(id, patch) {
   const fields = [];
   const values = [];
   let i = 1;
-  const columnMap = { title: "title", description: "description", status: "status", priority: "priority", assigneeId: "assignee_id", due: "due", dueTime: "due_time" };
+  const columnMap = { title: "title", description: "description", status: "status", priority: "priority", assigneeId: "assignee_id", due: "due", dueTime: "due_time", projectId: "project_id" };
   for (const [key, col] of Object.entries(columnMap)) {
     if (patch[key] !== undefined) {
       fields.push(`${col} = $${i++}`);

@@ -9,6 +9,7 @@ const {
 } = require("../db");
 const { authenticate } = require("../auth");
 const { sendPasswordResetEmail } = require("../utils/mailer");
+const { formatName } = require("../utils/names");
 
 const router = express.Router();
 
@@ -23,13 +24,15 @@ const hashToken = (token) => crypto.createHash("sha256").update(token).digest("h
 router.post("/register", async (req, res, next) => {
   try {
     const { name, email, password, title } = req.body || {};
-    if (!name || !name.trim()) return res.status(400).json({ error: "Name is required" });
+    const cleanName = formatName(name || "");
+    if (!cleanName) return res.status(400).json({ error: "Name is required" });
+    if (cleanName.length > 80) return res.status(400).json({ error: "Name is too long" });
     if (!email || !/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: "Valid email is required" });
     if (!password || password.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
     if (await getUserByEmail(email)) return res.status(409).json({ error: "An account with this email already exists" });
 
     const passwordHash = bcrypt.hashSync(password, 8);
-    let user = await createUser({ name: name.trim(), email: email.toLowerCase(), passwordHash, defaultTitle: title?.trim() || null });
+    let user = await createUser({ name: cleanName, email: email.toLowerCase(), passwordHash, defaultTitle: title?.trim() || null });
     user = await ensurePlatformAdminFromEnv(user);
 
     // Auto-accept any pending workspace invites sent to this email before they signed up.
