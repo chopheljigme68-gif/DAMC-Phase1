@@ -562,7 +562,7 @@ const Links = ({ workspaceId, projectId, taskId, canAttach }) => {
           {items.map((l) => (
             <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", borderRadius: 8, background: "var(--raised)" }}>
               <Link2 size={14} color="var(--text-faint)" style={{ flexShrink: 0 }} />
-              <a href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>
+              <a className="tfh-link" href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>
                 {l.label}
               </a>
               {canAttach && <button type="button" onClick={() => remove(l.id)} className="tfh-btn tfh-btn-ghost" style={{ padding: 5 }} aria-label="Remove link"><X size={13} color="var(--text-faint)" /></button>}
@@ -787,7 +787,7 @@ const SubtaskLinksMini = ({ workspaceId, projectId, taskId, subtaskId, canManage
           {items.map((l) => (
             <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 7px", borderRadius: 6, background: "var(--panel)" }}>
               <Link2 size={11} color="var(--text-faint)" />
-              <a href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>{l.label}</a>
+              <a className="tfh-link" href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>{l.label}</a>
               {canManage && <button type="button" onClick={() => remove(l.id)} className="tfh-btn tfh-btn-ghost" style={{ padding: 2 }} aria-label="Remove"><X size={10} /></button>}
             </div>
           ))}
@@ -866,7 +866,7 @@ const NewSubtaskForm = ({ onAdd, onCancel }) => {
           {links.map((l, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 7px", borderRadius: 6, background: "var(--panel)" }}>
               <Link2 size={11} color="var(--text-faint)" />
-              <span style={{ flex: 1, fontSize: 11.5, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.label}</span>
+              <a className="tfh-link" href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: 11.5, color: "var(--accent)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none" }} title={l.url}>{l.label}</a>
               <button type="button" onClick={() => removeLink(i)} className="tfh-btn tfh-btn-ghost" style={{ padding: 2 }} aria-label="Remove link"><X size={10} /></button>
             </div>
           ))}
@@ -1053,7 +1053,7 @@ const PendingFilesLinks = ({ draft, setDraft }) => {
           {draft.pendingLinks.map((l, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 8px", borderRadius: 7, background: "var(--raised)" }}>
               <Link2 size={12} color="var(--text-faint)" />
-              <span style={{ flex: 1, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.label}</span>
+              <a className="tfh-link" href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--accent)", textDecoration: "none" }} title={l.url}>{l.label}</a>
               <button type="button" onClick={() => removeLink(i)} className="tfh-btn tfh-btn-ghost" style={{ padding: 3 }} aria-label="Remove link"><X size={11} /></button>
             </div>
           ))}
@@ -2564,7 +2564,7 @@ const TextBlockLinks = ({ links, onChange, readOnly }) => {
     return (
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
         {links.map((l, i) => (
-          <a key={i} href={normalizeUrl(l.url)} target="_blank" rel="noreferrer" className="tfh-chip tfh-mono" style={{ background: "var(--accent-soft)", color: "var(--accent)", textDecoration: "none" }}>
+          <a key={i} href={normalizeUrl(l.url)} target="_blank" rel="noreferrer" className="tfh-chip tfh-mono tfh-link" style={{ background: "var(--accent-soft)", color: "var(--accent)", textDecoration: "none" }}>
             <Link2 size={10} /> {l.label}
           </a>
         ))}
@@ -2578,8 +2578,9 @@ const TextBlockLinks = ({ links, onChange, readOnly }) => {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 5 }}>
           {links.map((l, i) => (
             <span key={i} className="tfh-chip tfh-mono" style={{ background: "var(--raised)", color: "var(--text-dim)" }}>
-              <Link2 size={10} /> {l.label}
-              <button type="button" onClick={() => remove(i)} style={{ background: "none", border: "none", padding: 0, marginLeft: 3, display: "flex" }} aria-label="Remove link"><X size={10} /></button>
+              <Link2 size={10} />
+              <a className="tfh-link" href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }} title={l.url}>{l.label}</a>
+              <button type="button" onClick={() => remove(i)} style={{ background: "none", border: "none", padding: 0, marginLeft: 3, display: "flex", cursor: "pointer" }} aria-label="Remove link"><X size={10} /></button>
             </span>
           ))}
         </div>
@@ -3164,7 +3165,7 @@ const LinksList = ({ links, canManage, onAdd, onRemove, compact }) => {
           {links.map((l) => (
             <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: compact ? "5px 8px" : "6px 8px", borderRadius: 8, background: "var(--raised)" }}>
               <Link2 size={13} color="var(--text-faint)" style={{ flexShrink: 0 }} />
-              <a href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>{l.label}</a>
+              <a className="tfh-link" href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: "none" }}>{l.label}</a>
               {canManage && <button type="button" onClick={() => onRemove(l.id)} className="tfh-btn tfh-btn-ghost" style={{ padding: 4 }} aria-label="Remove link"><X size={12} color="var(--text-faint)" /></button>}
             </div>
           ))}
@@ -3649,7 +3650,7 @@ const MilestonesView = ({ workspaceId, projectId, project, canManage, isAdmin, u
                     {newLinks.map((l, i) => (
                       <div key={i} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 7px", borderRadius: 6, background: "var(--raised)" }}>
                         <Link2 size={11} color="var(--text-faint)" />
-                        <span style={{ flex: 1, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.label}</span>
+                        <a className="tfh-link" href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--accent)", textDecoration: "none" }} title={l.url}>{l.label}</a>
                         <button type="button" onClick={() => removeNewLink(i)} className="tfh-btn tfh-btn-ghost" style={{ padding: 2 }} aria-label="Remove link"><X size={10} /></button>
                       </div>
                     ))}

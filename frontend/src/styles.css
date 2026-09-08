@@ -113,6 +113,12 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   border: 1px solid transparent;
 }
 
+/* Any clickable link (task/subtask/milestone/activity, staged or saved).
+   The pointer cursor + hover underline is what makes it read — and feel —
+   like a real link, which is what was missing. */
+.tfh-link { cursor: pointer; }
+.tfh-link:hover { text-decoration: underline !important; }
+
 .tfh-input {
   background: var(--raised); border: 1px solid var(--line); border-radius: 10px;
   color: var(--text); padding: 8px 12px; font-size: 13px; width: 100%;
