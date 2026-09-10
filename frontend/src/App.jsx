@@ -44,7 +44,7 @@ const PRIORITIES = {
 const isUrgent = (level) => level === "high";
 const NAV = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "activity", label: "Activity Log", icon: BookOpen },
+  { id: "activity", label: "Collaboration Log", icon: BookOpen },
   { id: "board", label: "Board", icon: Columns3 },
   { id: "files", label: "Files", icon: FolderOpen },
   { id: "milestones", label: "Milestones", icon: Flag },
@@ -1543,6 +1543,12 @@ const AgendaRow = ({ item, onOpen }) => (
       <span style={{ fontSize: 12.5, color: item.kind === "task" && item.task.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{item.label}</span>
       {item.kind === "task" && <PriorityChip level={item.task.priority} />}
       {item.kind === "activity" && <span className="tfh-chip" style={{ fontSize: 9.5, background: "var(--raised)", color: "var(--text-faint)" }}>Logged</span>}
+      {/* When the row is date-led (upcoming/pending) but the task carries a
+          clock time, surface that time on the right too — the Chief asked to
+          see the time against each upcoming collab. */}
+      {item.kind === "task" && item.dateLabel && item.task.dueTime && (
+        <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--accent)", marginLeft: "auto" }}>{formatTimeLabel(item.task.dueTime)}</span>
+      )}
     </div>
   </div>
 );
@@ -1581,9 +1587,9 @@ const TeamMemberAgenda = ({ member, items, onOpen, emptyText, onAssignTask, pend
           onClick={(e) => { e.stopPropagation(); onAssignTask(member); }}
           className="tfh-btn tfh-btn-ghost"
           style={{ fontSize: 11, padding: "3px 8px", flexShrink: 0 }}
-          title={`Assign a task to ${member.name}`}
+          title={`Initiate a collab with ${member.name}`}
         >
-          <Plus size={12} /> Assign Task
+          <Plus size={12} /> Initiate Collab
         </button>
         {/* Bigger, red item count (the Chief asked for larger red numbers) */}
         <button onClick={() => setExpanded((e) => !e)} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
@@ -1688,7 +1694,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
     <div style={{ display: "flex", flexDirection: "column", gap: 18, flex: "1 1 45%", minWidth: 0 }}>
       <div className="tfh-card" style={{ padding: 18 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-          <span style={{ fontSize: 12.5, fontWeight: 700 }}>{showPast ? "My past activities" : "My today's activities"}</span>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>{showPast ? "My Past Collabs" : "My Today's Collabs"}</span>
           <button
             onClick={() => setShowPast((s) => !s)}
             className="tfh-btn tfh-btn-ghost"
@@ -1717,7 +1723,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
       </div>
 
       <div className="tfh-card" style={{ padding: 18 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>Upcoming works</div>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>Upcoming Collabs</div>
         {myUpcoming.length === 0 ? (
           <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing upcoming.</div>
         ) : (
@@ -1726,6 +1732,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
               <div key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: "pointer" }}>
                 <span className="tfh-mono" style={{ fontSize: 11, color: "var(--text-faint)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
                 <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
+                {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(t.dueTime)}</span>}
                 <PriorityChip level={t.priority} />
               </div>
             ))}
@@ -1735,7 +1742,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
 
       <div className="tfh-card" style={{ padding: 18 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <span style={{ fontSize: 12.5, fontWeight: 700 }}>Pending works</span>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>Pending Collabs</span>
           {myPending.length > 0 && <span className="tfh-chip" style={{ fontSize: 10, background: "var(--pri-high)", color: "#fff" }}>{myPending.length}</span>}
         </div>
         {myPending.length === 0 ? (
@@ -1764,7 +1771,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   const teamColumn = (
     <div style={{ flex: "1 1 53%", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>Team activities</span>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>Team Collabs</span>
         <div style={{ display: "flex", gap: 4, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 9, padding: 3 }}>
           {TEAM_TABS.map((t) => (
             <button
@@ -2705,7 +2712,7 @@ const BlockEditor = ({ content, setContent, readOnly, projects }) => {
 };
 
 const ActivityComments = ({ workspaceId, logId, currentUser, initialCount }) => {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState((initialCount || 0) > 0); // show existing comments by default
   const [comments, setComments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -2724,6 +2731,13 @@ const ActivityComments = ({ workspaceId, logId, currentUser, initialCount }) => 
       setLoading(false);
     }
   };
+
+  // If the entry already has comments, load and show them straight away —
+  // the Chief wants comments visible alongside the activity, not hidden
+  // behind a click.
+  useEffect(() => {
+    if ((initialCount || 0) > 0 && !loaded) load();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = () => {
     const next = !open;
@@ -2764,7 +2778,7 @@ const ActivityComments = ({ workspaceId, logId, currentUser, initialCount }) => 
       </button>
 
       {open && (
-        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ marginTop: 10, marginLeft: 12, paddingLeft: 12, borderLeft: "2px solid var(--line)", display: "flex", flexDirection: "column", gap: 8 }}>
           {loading ? (
             <div style={{ fontSize: 11.5, color: "var(--text-faint)", paddingLeft: 4 }}>Loading…</div>
           ) : (
@@ -2931,7 +2945,7 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
   return (
     <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
-        <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>Activity Log</div>
+        <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>Collaboration Log</div>
         <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>What you worked on, day by day. Add text notes or tables — as many of each as you need.</div>
       </div>
 
@@ -4620,16 +4634,18 @@ function Workspace() {
       <div className={`tfh-sidebar ${mobileNavOpen ? "open" : ""}`} style={{ width: 216, borderRight: "1px solid var(--line)", padding: "20px 14px", display: "flex", flexDirection: "column", gap: 22, background: "var(--ink)" }}>
         <WorkspaceSwitcher />
 
-        {/* Dashboard sits at the very top; the PROJECTS block goes directly
-            beneath it, then the rest of the nav — per the Chief's requested
-            order (Dashboard, then Projects, then everything else). */}
-        <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          {visibleNav.filter((n) => n.id === "dashboard").map((n) => (
+        {/* DASHBOARD section: Dashboard + Collaboration Log + Board grouped
+            together at the top (per the Chief's request), each under a
+            "DASHBOARD" header — mirroring how the PROJECTS block is grouped.
+            Then the PROJECTS block, then the remaining menu items. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 0.5, padding: "0 10px", marginBottom: 4 }}>Dashboard</div>
+          {visibleNav.filter((n) => ["dashboard", "activity", "board"].includes(n.id)).map((n) => (
             <button key={n.id} className={`tfh-nav-item ${view === n.id ? "active" : ""}`} onClick={() => { setView(n.id); setMobileNavOpen(false); }}>
               <n.icon size={16} /> {n.label}
             </button>
           ))}
-        </nav>
+        </div>
 
         <ProjectsSidebarList
           projects={projects}
@@ -4652,7 +4668,7 @@ function Workspace() {
         />
 
         <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          {visibleNav.filter((n) => n.id !== "dashboard").map((n) => (
+          {visibleNav.filter((n) => !["dashboard", "activity", "board"].includes(n.id)).map((n) => (
             <button key={n.id} className={`tfh-nav-item ${view === n.id ? "active" : ""}`} onClick={() => { setView(n.id); setMobileNavOpen(false); }}>
               <n.icon size={16} /> {n.label}
             </button>
