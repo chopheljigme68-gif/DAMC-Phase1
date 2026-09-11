@@ -352,7 +352,9 @@ const AttachmentRow = ({ attachment, workspaceId, projectId, taskId, onRemove })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachment.id]);
 
+  const [dlError, setDlError] = useState("");
   const openOrDownload = async () => {
+    setDlError("");
     try {
       const url = await api.getAttachmentBlobUrl(workspaceId, projectId, taskId, attachment.id);
       const a = document.createElement("a");
@@ -362,8 +364,15 @@ const AttachmentRow = ({ attachment, workspaceId, projectId, taskId, onRemove })
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-    } catch {
-      // silently ignore — the row will still be there to retry
+    } catch (err) {
+      // Don't swallow it — tell the user why. A 404 here almost always means
+      // the file was wiped from the server's disk (free-tier hosts reset
+      // uploaded files on every redeploy), which is exactly why pasting a
+      // Google-Drive link is the more reliable option for now.
+      const msg = /404/.test(err.message)
+        ? "This file is no longer on the server (it was cleared by a server restart). Please re-upload it or paste a link instead."
+        : (err.message || "Couldn't open this file. Please try again.");
+      setDlError(msg);
     }
   };
 
@@ -372,6 +381,7 @@ const AttachmentRow = ({ attachment, workspaceId, projectId, taskId, onRemove })
     : `${Math.max(1, Math.round(attachment.sizeBytes / 1024))} KB`;
 
   return (
+    <div>
     <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", borderRadius: 8, background: "var(--raised)" }}>
       {isImage ? (
         blobUrl ? (
@@ -392,6 +402,8 @@ const AttachmentRow = ({ attachment, workspaceId, projectId, taskId, onRemove })
       </button>
       <button type="button" onClick={openOrDownload} className="tfh-btn tfh-btn-ghost" style={{ padding: 5 }} aria-label="Download"><Download size={13} color="var(--text-faint)" /></button>
       {onRemove && <button type="button" onClick={onRemove} className="tfh-btn tfh-btn-ghost" style={{ padding: 5 }} aria-label="Remove attachment"><X size={13} color="var(--text-faint)" /></button>}
+    </div>
+    {dlError && <div style={{ fontSize: 11, color: "var(--pri-high)", padding: "4px 8px 0", lineHeight: 1.4 }}>{dlError}</div>}
     </div>
   );
 };
@@ -1532,24 +1544,38 @@ const buildUpcomingItems = (upcomingTasks) =>
   upcomingTasks.map((t) => ({ dateStr: t.due, dateLabel: shortDate(t.due), label: t.title, kind: "task", task: t }));
 
 const AgendaRow = ({ item, onOpen }) => (
-  <div
-    onClick={item.kind === "task" ? () => onOpen(item.task) : undefined}
-    style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: item.kind === "task" ? "pointer" : "default" }}
-  >
-    <span className="tfh-mono" style={{ fontSize: 11, color: item.time ? "var(--accent)" : item.dateLabel ? "var(--text-dim)" : "var(--text-faint)", minWidth: item.dateLabel ? 54 : 58, flexShrink: 0, marginTop: 1 }}>
-      {item.time ? formatTimeLabel(item.time) : item.dateLabel || "Anytime"}
-    </span>
-    <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-      <span style={{ fontSize: 12.5, color: item.kind === "task" && item.task.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{item.label}</span>
-      {item.kind === "task" && <PriorityChip level={item.task.priority} />}
-      {item.kind === "activity" && <span className="tfh-chip" style={{ fontSize: 9.5, background: "var(--raised)", color: "var(--text-faint)" }}>Logged</span>}
-      {/* When the row is date-led (upcoming/pending) but the task carries a
-          clock time, surface that time on the right too — the Chief asked to
-          see the time against each upcoming collab. */}
-      {item.kind === "task" && item.dateLabel && item.task.dueTime && (
-        <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--accent)", marginLeft: "auto" }}>{formatTimeLabel(item.task.dueTime)}</span>
-      )}
+  <div style={{ display: "flex", flexDirection: "column" }}>
+    <div
+      onClick={item.kind === "task" ? () => onOpen(item.task) : undefined}
+      style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: item.kind === "task" ? "pointer" : "default" }}
+    >
+      <span className="tfh-mono" style={{ fontSize: 11, color: item.time ? "var(--accent)" : item.dateLabel ? "var(--text-dim)" : "var(--text-faint)", minWidth: item.dateLabel ? 54 : 58, flexShrink: 0, marginTop: 1 }}>
+        {item.time ? formatTimeLabel(item.time) : item.dateLabel || "Anytime"}
+      </span>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12.5, color: item.kind === "task" && item.task.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{item.label}</span>
+        {item.kind === "task" && <PriorityChip level={item.task.priority} />}
+        {item.kind === "activity" && <span className="tfh-chip" style={{ fontSize: 9.5, background: "var(--raised)", color: "var(--text-faint)" }}>Logged</span>}
+        {/* When the row is date-led (upcoming/pending) but the task carries a
+            clock time, surface that time on the right too — the Chief asked to
+            see the time against each upcoming collab. */}
+        {item.kind === "task" && item.dateLabel && item.task.dueTime && (
+          <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--accent)", marginLeft: "auto" }}>{formatTimeLabel(item.task.dueTime)}</span>
+        )}
+      </div>
     </div>
+    {/* A task's latest comment shows indented right under it — so a
+        supervisor's note on a member's task/activity appears alongside it in
+        Team Collabs, not hidden inside the task dialog. */}
+    {item.kind === "task" && item.task.lastCommentBody && (
+      <div onClick={() => onOpen(item.task)} style={{ marginLeft: item.dateLabel ? 62 : 66, marginBottom: 4, paddingLeft: 10, borderLeft: "2px solid var(--line)", cursor: "pointer" }}>
+        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          <MessageSquare size={9} style={{ display: "inline", marginRight: 4, verticalAlign: "middle" }} />
+          {item.task.lastCommentAuthor ? `${item.task.lastCommentAuthor}: ` : ""}{item.task.lastCommentBody}
+          {item.task.commentCount > 1 ? `  (+${item.task.commentCount - 1} more)` : ""}
+        </span>
+      </div>
+    )}
   </div>
 );
 
@@ -1629,7 +1655,7 @@ const TEAM_TABS = [
   { id: "pending", label: "Pending" },
 ];
 
-const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject, onAssignTask }) => {
+const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject, onAssignTask, onGoBoard }) => {
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
   const [myLogs, setMyLogs] = useState([]);
@@ -1693,15 +1719,26 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   const mineColumn = (
     <div style={{ display: "flex", flexDirection: "column", gap: 18, flex: "1 1 45%", minWidth: 0 }}>
       <div className="tfh-card" style={{ padding: 18 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12.5, fontWeight: 700 }}>{showPast ? "My Past Collabs" : "My Today's Collabs"}</span>
-          <button
-            onClick={() => setShowPast((s) => !s)}
-            className="tfh-btn tfh-btn-ghost"
-            style={{ fontSize: 11, padding: "3px 9px", background: showPast ? "var(--accent-soft)" : "transparent", color: showPast ? "var(--accent)" : "var(--text-dim)" }}
-          >
-            {showPast ? "Show today" : "Show past"}
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {/* Quick jumps to the Board, pre-filtered — Complete → shipped
+                list, Pending → overdue list. Board stays in the nav; these
+                are just shortcuts. */}
+            <button onClick={() => onGoBoard("shipped")} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 9px", color: "var(--stage-done)" }} title="See completed collabs on the board">
+              <CheckCircle2 size={12} /> Complete
+            </button>
+            <button onClick={() => onGoBoard("overdue")} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 9px", color: "var(--pri-high)" }} title="See pending (overdue) collabs on the board">
+              <Clock size={12} /> Pending
+            </button>
+            <button
+              onClick={() => setShowPast((s) => !s)}
+              className="tfh-btn tfh-btn-ghost"
+              style={{ fontSize: 11, padding: "3px 9px", background: showPast ? "var(--accent-soft)" : "transparent", color: showPast ? "var(--accent)" : "var(--text-dim)" }}
+            >
+              {showPast ? "Show today" : "Show past"}
+            </button>
+          </div>
         </div>
         {showPast ? (
           myPastItems.length === 0 ? (
@@ -1723,7 +1760,17 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
       </div>
 
       <div className="tfh-card" style={{ padding: 18 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>Upcoming Collabs</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>Upcoming Collabs</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={() => onGoBoard("shipped")} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 9px", color: "var(--stage-done)" }} title="See completed collabs on the board">
+              <CheckCircle2 size={12} /> Complete
+            </button>
+            <button onClick={() => onGoBoard("overdue")} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 9px", color: "var(--pri-high)" }} title="See pending (overdue) collabs on the board">
+              <Clock size={12} /> Pending
+            </button>
+          </div>
+        </div>
         {myUpcoming.length === 0 ? (
           <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing upcoming.</div>
         ) : (
@@ -4728,7 +4775,7 @@ function Workspace() {
         </div>
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
-          {view === "dashboard" && <DashboardView workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} hasProject={!!projectId} onCreateProject={createProject} onAssignTask={openCreateFor} />}
+          {view === "dashboard" && <DashboardView workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} hasProject={!!projectId} onCreateProject={createProject} onAssignTask={openCreateFor} onGoBoard={(status) => { setStatusFilter(status); setView("board"); }} />}
           {view === "board" && (
             <BoardView
               tasks={tasks} users={users} projects={projects} onOpen={openEdit} onComplete={completeTask} onReopen={reopenTask} onAdd={openCreate} onBulkAdd={() => setBulkAddOpen(true)} onCreateProject={createProject} canManage={canManage} currentUserId={user.id}

@@ -561,7 +561,10 @@ const TASK_SELECT = `
       ) ORDER BY s.position)
       FILTER (WHERE s.id IS NOT NULL), '[]'
     ) AS subtasks,
-    (SELECT count(*)::int FROM task_attachments a WHERE a.task_id = t.id) AS "attachmentCount"
+    (SELECT count(*)::int FROM task_attachments a WHERE a.task_id = t.id) AS "attachmentCount",
+    (SELECT count(*)::int FROM task_comments tc WHERE tc.task_id = t.id) AS "commentCount",
+    (SELECT tc.body FROM task_comments tc WHERE tc.task_id = t.id ORDER BY tc.created_at DESC LIMIT 1) AS "lastCommentBody",
+    (SELECT cu.name FROM task_comments tc JOIN users cu ON cu.id = tc.user_id WHERE tc.task_id = t.id ORDER BY tc.created_at DESC LIMIT 1) AS "lastCommentAuthor"
   FROM tasks t
   LEFT JOIN projects p ON p.id = t.project_id
   LEFT JOIN subtasks s ON s.task_id = t.id
