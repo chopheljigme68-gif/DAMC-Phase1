@@ -6,6 +6,35 @@ A real, deployable task board with proper hierarchy: **workspaces** contain
 boundary below is enforced by the server, not just hidden in the UI, and
 was tested live before being shipped.
 
+## What's new in this round — correction log #7
+
+- **The account block moved to the top right, as a proper menu.** It used
+  to be a panel pinned to the bottom of the sidebar, where a long name was
+  ellipsised down to "Sangay Thi…" and Sign out sat one mis-click away from
+  the profile button. It's now an avatar pill in the top bar beside Quick
+  add / notifications / theme, opening a menu with the **full name**, job
+  title, email and role badge, then Edit profile and Sign out as distinct
+  rows (Sign out in the priority red, so it reads as the destructive one).
+  Closes on outside-click or Escape, same mechanics as the notification
+  bell so the two popovers in that bar behave identically. On narrow
+  screens the name drops away and the avatar alone is the control.
+
+- **Complete and Pending no longer leave the dashboard.** They were buttons
+  in the "My Today's Collabs" header that navigated to the Board
+  pre-filtered. The three cards (Today / Upcoming / Pending) stay exactly as
+  they were; the buttons are now a compact **Today · Past · Complete ·
+  Pending** strip that swaps the top card's list in place, with the card
+  title following the selection. The overdue count rides on the Pending pill.
+  - "Past" is the diary — finished tasks *and* logged activity from before
+    today. "Complete" is tasks only, today's included, which is what the old
+    Complete button showed on the Board. Different questions, so both stay.
+  - Dates are coloured for what the list means: overdue in the priority red,
+    completed in the done colour, everything else in the scheduled blue.
+  - Rows in all three cards now have the same hover, keyboard focus and
+    Enter/Space handling, and keep their behaviour from the previous round —
+    tasks open the task dialog, logged activities open their detail popup.
+
+## Previously shipped
 ## What's new in this round — correction log #6
 
 - **Recurring activities.** A task can now repeat: daily, every weekday,
