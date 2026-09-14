@@ -598,3 +598,31 @@ CREATE TABLE IF NOT EXISTS activity_log_comments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_activity_log_comments_log ON activity_log_comments(activity_log_id, created_at ASC);
+/* ---------------- recurring activities ---------------- */
+-- A task can define a repeat rule; the rule lives on the FIRST task of the
+-- series ("the series head") and every later occurrence is a real, ordinary
+-- task row pointing back at it via recurrence_parent_id. Deliberately not a
+-- virtual/computed occurrence: occurrences must be individually
+-- completable, assignable, commentable and attachable, exactly like any
+-- other task, and every existing query (board, dashboard, calendar,
+-- reminders) then works on them with no change at all.
+--
+-- recurrence shape (validated in backend/src/utils/recurrence.js):
+--   { freq: 'daily' | 'weekly' | 'monthly',
+--     interval: <int >= 1>,
+--     byWeekday: [0..6]        -- weekly only, 0 = Sunday
+--     until: 'YYYY-MM-DD' | null }
+-- "Every weekday" is just weekly with byWeekday [1,2,3,4,5] — one less
+-- concept in the data model, same result.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence JSONB;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_parent_id UUID REFERENCES tasks(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_parent ON tasks(recurrence_parent_id);
+-- Makes occurrence generation idempotent at the database level: the sweep
+-- can run as often as it likes and re-inserting a date that already exists
+-- is a no-op rather than a duplicate. This is the safety net — the
+-- generator also checks first, but two overlapping sweeps must not be able
+-- to race a double insert through.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_recurrence_occurrence
+  ON tasks(recurrence_parent_id, due)
+  WHERE recurrence_parent_id IS NOT NULL;

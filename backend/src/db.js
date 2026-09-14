@@ -549,6 +549,7 @@ const TASK_SELECT = `
     t.workspace_id AS "workspaceId", t.project_id AS "projectId", MAX(p.name) AS "projectName",
     to_char(t.due, 'YYYY-MM-DD') AS due,
     to_char(t.due_time, 'HH24:MI') AS "dueTime",
+    t.recurrence, t.recurrence_parent_id AS "recurrenceParentId",
     t.created_at AS "createdAt", t.completed_at AS "completedAt", t.updated_at AS "updatedAt",
     COALESCE(
       json_agg(json_build_object(
@@ -605,12 +606,13 @@ async function createTask(data) {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `INSERT INTO tasks (title, description, status, priority, assignee_id, created_by, due, due_time, workspace_id, project_id, completed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CASE WHEN $3 = 'done' THEN now() ELSE NULL END)
+      `INSERT INTO tasks (title, description, status, priority, assignee_id, created_by, due, due_time, workspace_id, project_id, recurrence, recurrence_parent_id, completed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $3 = 'done' THEN now() ELSE NULL END)
        RETURNING id`,
       [
         data.title, data.description || "", data.status || "todo", data.priority || "medium",
         data.assigneeId, data.createdBy || null, data.due || null, data.dueTime || null, data.workspaceId, data.projectId,
+        data.recurrence ? JSON.stringify(data.recurrence) : null, data.recurrenceParentId || null,
       ]
     );
     taskId = rows[0].id;
@@ -655,6 +657,13 @@ async function updateTask(id, patch) {
       values.push(patch[key]);
     }
   }
+  // recurrence is JSONB, not a scalar column — it needs its own explicit
+  // stringify rather than riding along in columnMap above (node-postgres
+  // would send a plain object as a Postgres record literal, not JSON).
+  if (patch.recurrence !== undefined) {
+    fields.push(`recurrence = $${i++}`);
+    values.push(patch.recurrence ? JSON.stringify(patch.recurrence) : null);
+  }
   if (patch.status && patch.status !== before.status) {
     fields.push(patch.status === "done" ? "completed_at = now()" : "completed_at = NULL");
   }
@@ -666,7 +675,7 @@ async function updateTask(id, patch) {
 
   await pool.query(`UPDATE tasks SET ${fields.join(", ")} WHERE id = $${i}`, values);
   const task = await getTaskById(id);
-  return { task, prevStatus: before.status, prevAssignee: before.assigneeId };
+  return { task, prevStatus: before.status, prevAssignee: before.assigneeId, before };
 }
 
 async function getSubtaskById(id) {
@@ -729,6 +738,159 @@ async function replaceSubtasks(id, subtasks) {
 
 async function deleteTask(id) {
   await pool.query("DELETE FROM tasks WHERE id = $1", [id]);
+}
+
+/* ==================== recurring activities ==================== */
+// The rule lives on the series head; occurrences are ordinary task rows
+// with recurrence_parent_id pointing back at it. See
+// backend/src/utils/recurrence.js for the expansion logic.
+
+// Every series head that still has dates left to generate. Excludes rules
+// that have already run past their end date — nothing to do for those.
+async function getActiveRecurringHeads() {
+  const { rows } = await pool.query(
+    `SELECT t.id, t.title, t.description, t.priority, t.assignee_id AS "assigneeId",
+            t.created_by AS "createdBy", t.workspace_id AS "workspaceId", t.project_id AS "projectId",
+            to_char(t.due, 'YYYY-MM-DD') AS due, to_char(t.due_time, 'HH24:MI') AS "dueTime",
+            t.recurrence
+     FROM tasks t
+     WHERE t.recurrence IS NOT NULL
+       AND t.recurrence_parent_id IS NULL
+       AND t.due IS NOT NULL
+       AND (t.recurrence->>'until' IS NULL OR (t.recurrence->>'until')::date >= current_date)`
+  );
+  return rows;
+}
+
+// Dates already taken by this series (the head's own date included), so the
+// generator only inserts what's genuinely missing.
+async function getSeriesOccurrenceDates(headId) {
+  const { rows } = await pool.query(
+    `SELECT to_char(due, 'YYYY-MM-DD') AS due FROM tasks
+     WHERE due IS NOT NULL AND (id = $1 OR recurrence_parent_id = $1)`,
+    [headId]
+  );
+  return rows.map((r) => r.due);
+}
+
+// The subtask TEXT of the series head, copied onto each occurrence so a
+// repeating checklist actually repeats. Attachments, links and comments are
+// deliberately NOT copied — those are evidence of one specific day's work.
+async function getSeriesTemplateSubtasks(headId) {
+  const { rows } = await pool.query(
+    `SELECT text, start_time AS "startTime", end_time AS "endTime", description
+     FROM subtasks WHERE task_id = $1 ORDER BY position ASC`,
+    [headId]
+  );
+  return rows;
+}
+
+// Inserts one occurrence. ON CONFLICT DO NOTHING leans on the partial
+// unique index (recurrence_parent_id, due) so concurrent sweeps can't
+// double-insert a date. Returns the new task, or null if it already existed.
+async function createRecurrenceOccurrence(head, due, subtasks) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `INSERT INTO tasks (title, description, status, priority, assignee_id, created_by, due, due_time,
+                          workspace_id, project_id, recurrence_parent_id)
+       VALUES ($1, $2, 'todo', $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (recurrence_parent_id, due) WHERE recurrence_parent_id IS NOT NULL DO NOTHING
+       RETURNING id`,
+      [
+        head.title, head.description || "", head.priority || "medium", head.assigneeId, head.createdBy || null,
+        due, head.dueTime || null, head.workspaceId, head.projectId, head.id,
+      ]
+    );
+    if (rows.length === 0) { await client.query("ROLLBACK"); return null; }
+    const taskId = rows[0].id;
+    for (let i = 0; i < (subtasks || []).length; i++) {
+      const s = subtasks[i];
+      await client.query(
+        `INSERT INTO subtasks (task_id, text, done, position, start_time, end_time, description)
+         VALUES ($1, $2, false, $3, $4, $5, $6)`,
+        [taskId, s.text, i, s.startTime || null, s.endTime || null, s.description || ""]
+      );
+    }
+    await client.query("COMMIT");
+    return getTaskById(taskId);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// When a repeat rule is edited or switched off, future occurrences built
+// from the OLD rule have to go — but only ones nobody has touched yet
+// (still 'todo', no comments, no files). Anything someone has already
+// worked on stays put; silently deleting a colleague's work because a rule
+// changed would be the worst possible behaviour here.
+async function deleteUntouchedFutureOccurrences(headId, fromDate) {
+  const { rows } = await pool.query(
+    `DELETE FROM tasks t
+     WHERE t.recurrence_parent_id = $1
+       AND t.due > $2
+       AND t.status = 'todo'
+       AND NOT EXISTS (SELECT 1 FROM task_comments c WHERE c.task_id = t.id)
+       AND NOT EXISTS (SELECT 1 FROM task_attachments a WHERE a.task_id = t.id)
+       AND NOT EXISTS (SELECT 1 FROM subtasks s WHERE s.task_id = t.id AND s.done)
+     RETURNING t.id`,
+    [headId, fromDate]
+  );
+  return rows.length;
+}
+
+// Before deleting a series head, hand the rule to the next occurrence and
+// repoint the rest at it. Without this, the ON DELETE CASCADE on
+// recurrence_parent_id would take the entire series down with the first
+// task — including occurrences people had already worked on. Deleting one
+// activity should delete one activity.
+async function promoteNextSeriesHead(headId) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: heads } = await client.query(
+      `SELECT recurrence FROM tasks WHERE id = $1 AND recurrence IS NOT NULL AND recurrence_parent_id IS NULL`,
+      [headId]
+    );
+    if (heads.length === 0) { await client.query("ROLLBACK"); return null; }
+
+    const { rows: next } = await client.query(
+      `SELECT id FROM tasks WHERE recurrence_parent_id = $1 ORDER BY due ASC NULLS LAST, created_at ASC LIMIT 1`,
+      [headId]
+    );
+    if (next.length === 0) { await client.query("ROLLBACK"); return null; }
+
+    const newHeadId = next[0].id;
+    await client.query(
+      `UPDATE tasks SET recurrence = $2, recurrence_parent_id = NULL, updated_at = now() WHERE id = $1`,
+      [newHeadId, heads[0].recurrence]
+    );
+    await client.query(
+      `UPDATE tasks SET recurrence_parent_id = $2 WHERE recurrence_parent_id = $1 AND id <> $2`,
+      [headId, newHeadId]
+    );
+    await client.query("COMMIT");
+    return newHeadId;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// The series head for any task: itself if it defines the rule, otherwise
+// its parent. Editing "the whole series" from any occurrence needs this.
+async function getSeriesHeadId(taskId) {
+  const { rows } = await pool.query(
+    `SELECT COALESCE(recurrence_parent_id, id) AS "headId" FROM tasks WHERE id = $1`,
+    [taskId]
+  );
+  return rows[0]?.headId || null;
 }
 
 /* ==================== task attachments ==================== */
@@ -1232,6 +1394,8 @@ module.exports = {
   addMilestoneLink, deleteMilestoneLink,
   getAttachmentsForMilestone, getMilestoneAttachmentById, addMilestoneAttachment, deleteMilestoneAttachment,
   getTasks, getAllTasksForWorkspace, getTaskById, createTask, updateTask, replaceSubtasks, deleteTask, getSubtaskById,
+  getActiveRecurringHeads, getSeriesOccurrenceDates, getSeriesTemplateSubtasks, createRecurrenceOccurrence,
+  deleteUntouchedFutureOccurrences, getSeriesHeadId, promoteNextSeriesHead,
   getAttachmentsForTask, getAttachmentById, addAttachment, deleteAttachment,
   getAttachmentsForSubtask, getSubtaskAttachmentById, addSubtaskAttachment, deleteSubtaskAttachment,
   getLinksForSubtask, addSubtaskLink, getSubtaskLinkById, deleteSubtaskLink,

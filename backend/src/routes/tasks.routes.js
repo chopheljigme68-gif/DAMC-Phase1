@@ -2,6 +2,7 @@ const express = require("express");
 const fs = require("fs");
 const {
   getTasks, getTaskById, createTask, updateTask, replaceSubtasks, deleteTask, getWorkspaceMembers, getSubtaskById, getProjectById,
+  deleteUntouchedFutureOccurrences, promoteNextSeriesHead,
   getAttachmentsForTask, getAttachmentById, addAttachment, deleteAttachment,
   getCommentsForTask, addComment,
   getLinksForTask, addLink, getLinkById, deleteLink,
@@ -12,6 +13,8 @@ const { authenticate } = require("../auth");
 const { requireWorkspaceMember, requireProjectInWorkspace } = require("../middleware/workspace");
 const { notify, broadcastTaskChange } = require("../utils/notify");
 const { taskUpload, subtaskUpload } = require("../utils/upload");
+const { normalizeRecurrence, localDateStr } = require("../utils/recurrence");
+const { generateForTask } = require("../utils/recurrenceRunner");
 
 const router = express.Router({ mergeParams: true });
 router.use(authenticate, requireWorkspaceMember, requireProjectInWorkspace);
@@ -78,17 +81,28 @@ router.get("/", async (req, res, next) => {
 // be opened up.
 router.post("/", async (req, res, next) => {
   try {
-    const { title, description, status, priority, assigneeId, due, dueTime, subtasks, links } = req.body || {};
+    const { title, description, status, priority, assigneeId, due, dueTime, subtasks, links, recurrence } = req.body || {};
     if (!title || !title.trim()) return res.status(400).json({ error: "Title is required" });
     if (!assigneeId) return res.status(400).json({ error: "Assignee is required" });
     if (!(await assertAssigneeIsMember(req.params.workspaceId, assigneeId))) {
       return res.status(400).json({ error: "Assignee must be a member of this workspace" });
     }
+    // A repeat rule needs a date to repeat FROM — without one there's no
+    // anchor to expand against, so reject it here rather than silently
+    // storing a rule that can never produce an occurrence.
+    const { recurrence: rule, error: ruleError } = normalizeRecurrence(recurrence);
+    if (ruleError) return res.status(400).json({ error: ruleError });
+    if (rule && !due) return res.status(400).json({ error: "Pick a due date — a repeating activity repeats from its first date" });
 
     const task = await createTask({
       title: title.trim(), description, status, priority, assigneeId, due, dueTime, subtasks, links,
+      recurrence: rule,
       createdBy: req.user.id, workspaceId: req.params.workspaceId, projectId: req.params.projectId,
     });
+
+    // Materialise the upcoming occurrences now, so they're on the board the
+    // moment the dialog closes instead of on the next hourly sweep.
+    if (rule) await generateForTask(task.id);
 
     if (assigneeId !== req.user.id) {
       await notify({
@@ -199,7 +213,32 @@ router.patch("/:id", async (req, res, next) => {
       patch.projectId = req.body.projectId;
     }
 
+    // Repeat rule. Only editable on the series HEAD — changing it from one
+    // occurrence in the middle would make "which task owns the rule"
+    // ambiguous, so the client edits the series from its first task.
+    let ruleChanged = false;
+    if (req.body.recurrence !== undefined) {
+      if (existing.recurrenceParentId) {
+        return res.status(400).json({ error: "Open the first activity in this series to change how it repeats" });
+      }
+      const { recurrence: rule, error: ruleError } = normalizeRecurrence(req.body.recurrence);
+      if (ruleError) return res.status(400).json({ error: ruleError });
+      const nextDue = patch.due !== undefined ? patch.due : existing.due;
+      if (rule && !nextDue) return res.status(400).json({ error: "Pick a due date — a repeating activity repeats from its first date" });
+      ruleChanged = JSON.stringify(rule) !== JSON.stringify(existing.recurrence || null);
+      patch.recurrence = rule;
+    }
+
     const { task, prevStatus, prevAssignee } = await updateTask(req.params.id, patch);
+
+    // A changed (or removed) rule invalidates future occurrences built from
+    // the old one — clear the untouched ones, then regenerate. Occurrences
+    // someone has already worked on are left alone (see
+    // deleteUntouchedFutureOccurrences).
+    if (ruleChanged || (patch.due !== undefined && task.recurrence)) {
+      await deleteUntouchedFutureOccurrences(task.id, localDateStr());
+      if (task.recurrence) await generateForTask(task.id);
+    }
     const members = await getWorkspaceMembers(req.params.workspaceId);
     const admin = members.find((m) => m.role === "admin");
 
@@ -249,6 +288,9 @@ router.delete("/:id", async (req, res, next) => {
     if (!isManager(req)) return res.status(403).json({ error: "Only the workspace admin or team lead can delete tasks" });
     const existing = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!existing) return res.status(404).json({ error: "Task not found" });
+    // Deleting the first activity of a repeating series must not cascade
+    // the whole series away — hand the rule to the next occurrence first.
+    if (existing.recurrence && !existing.recurrenceParentId) await promoteNextSeriesHead(req.params.id);
     await deleteTask(req.params.id);
     broadcastTaskChange(req.params.workspaceId, { reason: "deleted", taskId: req.params.id, projectId: req.params.projectId });
     res.status(204).end();

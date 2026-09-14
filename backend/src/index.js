@@ -5,6 +5,7 @@ const http = require("http");
 
 const { initSocket } = require("./socket");
 const { startDueSoonScheduler } = require("./utils/reminders");
+const { startRecurrenceScheduler } = require("./utils/recurrenceRunner");
 
 const authRoutes = require("./routes/auth.routes");
 const usersRoutes = require("./routes/users.routes");
@@ -68,6 +69,7 @@ initSocket(server, CORS_ORIGIN);
 server.listen(PORT, () => {
   console.log(`Team Flow Hub API + realtime server listening on http://localhost:${PORT}`);
   startDueSoonScheduler();
+  startRecurrenceScheduler();
   warnIfAppUrlMisconfigured();
 });
 

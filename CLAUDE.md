@@ -67,6 +67,38 @@ Don't assume; the rules have flip-flopped across sessions based on evolving
 client requirements, so verify current state by reading the code, not by
 assuming from a past description.
 
+## Recurring activities — occurrences are real rows, not virtual
+
+`tasks.recurrence` (JSONB) holds the repeat rule and lives ONLY on the first
+task of a series ("the head", `recurrence_parent_id IS NULL`). Every later
+occurrence is an ordinary task row pointing back at the head via
+`recurrence_parent_id`. This was chosen deliberately over computing
+occurrences on read: they have to be individually completable, assignable,
+commentable and attachable, and this way the board, calendar, dashboard and
+the due-soon reminder sweep all handle them with zero changes.
+
+- Rule shape and expansion: `backend/src/utils/recurrence.js`. All date
+  maths is on `'YYYY-MM-DD'` strings via **UTC noon** Date objects — these
+  are calendar dates, not instants, and noon is what stops a server
+  timezone from shifting a date by a day. Monthly anchors on the ORIGINAL
+  day-of-month, so a series starting on the 31st doesn't degrade to the
+  28th permanently after one February.
+- Generation: `backend/src/utils/recurrenceRunner.js`, 60-day horizon, run
+  inline after a save AND on an hourly sweep (same pattern as
+  `reminders.js`). It is idempotent, backed by the partial unique index
+  `uq_tasks_recurrence_occurrence (recurrence_parent_id, due)` — two
+  overlapping sweeps cannot race a duplicate through.
+- Editing a rule deletes only **untouched** future occurrences
+  (`deleteUntouchedFutureOccurrences`: still `todo`, no comments, no
+  attachments, no ticked subtasks) and regenerates. Never widen that filter
+  to "all future occurrences" — it would silently destroy work someone has
+  already done.
+- Deleting a series head calls `promoteNextSeriesHead` FIRST, because
+  `recurrence_parent_id` cascades — without the promotion, deleting the
+  first activity would take the whole series with it.
+- `PATCH` with a `recurrence` on a non-head task is rejected (400) on
+  purpose: "which task owns the rule" must stay unambiguous.
+
 ## The "stage now, upload after save" pattern
 
 Files can't go in a JSON body. Established pattern, used in three places

@@ -16,6 +16,12 @@
   --pri-low: #4fd1c5;
   --pri-medium: #e8a33d;
   --pri-high: #e8615b;
+  /* Scheduled-date text (Upcoming/Pending/Past agenda rows). Dates were
+     using --text-faint and read as disabled next to the green times, so
+     they get their own token: a clear blue that stays distinct from the
+     brand green (--accent) used for clock times, and from the priority
+     colours. */
+  --date-scheduled: #8fb4ff;
   --chart-grid: #2b3142;
   --chart-tick: #8b93a7;
   --chart-tooltip-bg: #20263f;
@@ -40,6 +46,7 @@
   --pri-low: #1f9a8c;
   --pri-medium: #c9821b;
   --pri-high: #d1453d;
+  --date-scheduled: #2f5fc0;
   --chart-grid: #dee3ed;
   --chart-tick: #5b6272;
   --chart-tooltip-bg: #ffffff;
@@ -142,6 +149,13 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 
 .tfh-task-card { transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease; }
 .tfh-task-card:hover { transform: translateY(-2px); border-color: var(--text-faint); box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.5); }
+
+/* Agenda rows (dashboard + Team Collabs) are clickable — tasks open their
+   dialog, logged activities open their detail. Without a hover state
+   there's nothing telling you the row does anything. */
+.tfh-agenda-row { transition: background 0.12s ease; }
+.tfh-agenda-row:hover { background: var(--raised); }
+.tfh-agenda-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .tfh-checkbox {
   width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid var(--line);

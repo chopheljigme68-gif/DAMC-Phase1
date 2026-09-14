@@ -5,7 +5,7 @@ import {
   Flag, ChevronLeft, ChevronRight, Trash2, GripVertical, ArrowRight, Menu, Sparkles,
   Bell, Crown, Sun, Moon, LogOut, AlertTriangle, Loader2, RefreshCw,
   UserPlus, ChevronDown, ChevronUp, Building2, Shield, FolderKanban, Lock,
-  Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, BookOpen, Table as TableIcon, CheckCircle2, UserX,
+  Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, BookOpen, Table as TableIcon, CheckCircle2, UserX, Repeat, CalendarRange,
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -122,6 +122,14 @@ const localDateStr = (date = new Date()) => {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+};
+
+// Day arithmetic on a 'YYYY-MM-DD' string. Built at local noon so a DST
+// change can never land the result on the wrong calendar day.
+const shiftDateStr = (dateStr, days) => {
+  const d = new Date(`${dateStr}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return localDateStr(d);
 };
 
 const dueMeta = (dateStr, status) => {
@@ -268,6 +276,14 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
           </span>
         )}
         <PriorityChip level={task.priority} />
+        {(task.recurrence || task.recurrenceParentId) && (
+          <span
+            className="tfh-chip" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+            title={task.recurrence ? describeRecurrence(task.recurrence) : "Part of a repeating activity"}
+          >
+            <Repeat size={10} /> Repeats
+          </span>
+        )}
         {total > 0 && (
           <span className="tfh-chip tfh-mono" style={{ background: "var(--raised)", color: "var(--text-dim)" }}>
             {done}/{total}
@@ -323,6 +339,7 @@ const emptyDraft = (status, users, currentUserId, projectId) => ({
   id: null, title: "", description: "", status: status || "todo", priority: "medium",
   assigneeId: currentUserId || users[0]?.id || "", due: localDateStr(new Date(Date.now() + 3 * 86400000)),
   dueTime: "", subtasks: [], pendingLinks: [], pendingFiles: [], projectId: projectId || "",
+  recurrence: null,
 });
 
 const DeleteButton = ({ onConfirm }) => {
@@ -1080,6 +1097,151 @@ const PendingFilesLinks = ({ draft, setDraft }) => {
   );
 };
 
+/* ------------------------------------------------------------------ */
+/* Recurring activities — the "does this repeat?" control               */
+/* ------------------------------------------------------------------ */
+// Mirrors the rule shape the backend stores and validates (see
+// backend/src/utils/recurrence.js): { freq, interval, byWeekday, until }.
+// "Every weekday" is deliberately not its own freq — it's weekly on
+// Mon–Fri, so the data model stays at three frequencies.
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAYS_ONLY = [1, 2, 3, 4, 5];
+
+const REPEAT_PRESETS = [
+  { id: "none", label: "Does not repeat" },
+  { id: "daily", label: "Daily" },
+  { id: "weekdays", label: "Every weekday (Mon–Fri)" },
+  { id: "weekly", label: "Weekly on…" },
+  { id: "monthly", label: "Monthly on this date" },
+];
+
+const sameDays = (a = [], b = []) => a.length === b.length && a.every((d, i) => d === b[i]);
+
+// Which preset a stored rule corresponds to — so reopening a task shows the
+// control in the state the user left it, not reset to "Does not repeat".
+const presetOf = (rule) => {
+  if (!rule) return "none";
+  if (rule.freq === "daily") return "daily";
+  if (rule.freq === "monthly") return "monthly";
+  if (rule.freq === "weekly" && rule.interval === 1 && sameDays(rule.byWeekday, WEEKDAYS_ONLY)) return "weekdays";
+  return "weekly";
+};
+
+const describeRecurrence = (rule) => {
+  if (!rule) return "";
+  const every = rule.interval > 1 ? `every ${rule.interval} ` : "every ";
+  let base;
+  if (rule.freq === "daily") base = rule.interval > 1 ? `Repeats every ${rule.interval} days` : "Repeats daily";
+  else if (rule.freq === "monthly") base = rule.interval > 1 ? `Repeats ${every}months on this date` : "Repeats monthly on this date";
+  else if (sameDays(rule.byWeekday, WEEKDAYS_ONLY) && rule.interval === 1) base = "Repeats every weekday";
+  else base = `Repeats ${every}week${rule.interval > 1 ? "s" : ""} on ${(rule.byWeekday || []).map((d) => WEEKDAY_LABELS[d]).join(", ")}`;
+  return rule.until ? `${base}, until ${shortDate(rule.until)}` : base;
+};
+
+const RecurrenceField = ({ value, due, disabled, isOccurrence, onChange }) => {
+  const preset = presetOf(value);
+  const dueWeekday = due ? new Date(`${due}T12:00:00`).getDay() : new Date().getDay();
+
+  // An occurrence generated from a series can't own the rule — editing the
+  // schedule happens on the first activity, which is also where the backend
+  // enforces it. Show the rule read-only rather than a control that would
+  // be rejected on save.
+  if (isOccurrence) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-dim)", background: "var(--raised)", padding: "9px 12px", borderRadius: 10, marginBottom: 14 }}>
+        <Repeat size={13} color="var(--accent)" />
+        Part of a repeating activity — open the first one in the series to change how it repeats.
+      </div>
+    );
+  }
+
+  const applyPreset = (id) => {
+    if (id === "none") return onChange(null);
+    const until = value?.until || null;
+    if (id === "daily") return onChange({ freq: "daily", interval: 1, byWeekday: null, until });
+    if (id === "monthly") return onChange({ freq: "monthly", interval: 1, byWeekday: null, until });
+    if (id === "weekdays") return onChange({ freq: "weekly", interval: 1, byWeekday: WEEKDAYS_ONLY, until });
+    return onChange({ freq: "weekly", interval: value?.interval || 1, byWeekday: value?.byWeekday?.length ? value.byWeekday : [dueWeekday], until });
+  };
+
+  const toggleWeekday = (day) => {
+    const current = value?.byWeekday || [];
+    const next = current.includes(day) ? current.filter((d) => d !== day) : [...current, day].sort((a, b) => a - b);
+    if (next.length === 0) return; // a weekly rule with no day would never fire
+    onChange({ ...value, byWeekday: next });
+  };
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <label className="tfh-label" htmlFor="tfh-repeat">
+        Repeat <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(for activities that happen on a schedule)</span>
+      </label>
+      <select
+        id="tfh-repeat" className="tfh-input" disabled={disabled} value={preset}
+        onChange={(e) => applyPreset(e.target.value)}
+        style={{ opacity: disabled ? 0.7 : 1 }}
+      >
+        {REPEAT_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+      </select>
+
+      {value && (
+        <div className="tfh-expand-in" style={{ marginTop: 10, padding: 12, borderRadius: 10, background: "var(--raised)", display: "flex", flexDirection: "column", gap: 10 }}>
+          {preset === "weekly" && (
+            <div>
+              <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 6 }}>On these days</div>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                {WEEKDAY_LABELS.map((label, day) => {
+                  const on = (value.byWeekday || []).includes(day);
+                  return (
+                    <button
+                      key={day} type="button" disabled={disabled} onClick={() => toggleWeekday(day)}
+                      className="tfh-btn"
+                      style={{ fontSize: 11, padding: "4px 9px", background: on ? "var(--accent-soft)" : "transparent", color: on ? "var(--accent)" : "var(--text-dim)", borderColor: on ? "var(--accent)" : "var(--line)" }}
+                      aria-pressed={on}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {preset !== "weekdays" && (
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>
+                  Every {value.freq === "daily" ? "n days" : value.freq === "weekly" ? "n weeks" : "n months"}
+                </div>
+                <input
+                  type="number" min={1} max={52} className="tfh-input" disabled={disabled}
+                  value={value.interval || 1}
+                  onChange={(e) => onChange({ ...value, interval: Math.min(52, Math.max(1, parseInt(e.target.value, 10) || 1)) })}
+                  style={{ fontSize: 12 }}
+                />
+              </div>
+            )}
+            <div>
+              <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>Ends on (optional)</div>
+              <input
+                type="date" className="tfh-input" disabled={disabled} min={due || undefined}
+                value={value.until || ""}
+                onChange={(e) => onChange({ ...value, until: e.target.value || null })}
+                style={{ fontSize: 12 }}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--accent)" }}>
+            <Repeat size={12} /> {describeRecurrence(value)}
+            {!due && <span style={{ color: "var(--pri-high)" }}>— pick a due date first</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelete, saving, saveError, uploadPhase, isWorkspaceManager, workspaceId, currentUserId }) => {
   const [addingSubtask, setAddingSubtask] = useState(false);
   const titleRef = useRef(null);
@@ -1151,6 +1313,35 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
           </div>
         )}
 
+        {/* Who / when sits directly under "Add subtask" — the three fields
+            people fill in on almost every task, kept together and above the
+            filing details (project, stage, priority) they change far less
+            often. */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+          <div>
+            <label className="tfh-label">Assignee</label>
+            <select disabled={!canChangeAssignee} className="tfh-input" value={draft.assigneeId} onChange={(e) => setDraft({ ...draft, assigneeId: e.target.value })} style={{ opacity: canChangeAssignee ? 1 : 0.7 }}>
+              {users.map((m) => <option key={m.id} value={m.id}>{m.name}{m.role === "admin" ? " (Admin)" : m.role === "lead" ? " (Lead)" : ""}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="tfh-label">Due date</label>
+            <input type="date" disabled={!canEditFields} className="tfh-input" value={draft.due} onChange={(e) => setDraft({ ...draft, due: e.target.value })} style={{ opacity: canEditFields ? 1 : 0.7 }} />
+          </div>
+          <div>
+            <label className="tfh-label">Time <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional — for meetings/appointments)</span></label>
+            <input type="time" disabled={!canEditFields} className="tfh-input" value={draft.dueTime || ""} onChange={(e) => setDraft({ ...draft, dueTime: e.target.value })} style={{ opacity: canEditFields ? 1 : 0.7 }} />
+          </div>
+        </div>
+
+        <RecurrenceField
+          value={draft.recurrence || null}
+          due={draft.due}
+          disabled={!canEditFields}
+          isOccurrence={!!draft.recurrenceParentId}
+          onChange={(recurrence) => setDraft({ ...draft, recurrence })}
+        />
+
         <div style={{ marginBottom: 14 }}>
           <label className="tfh-label">Project</label>
           <select
@@ -1184,20 +1375,6 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
               </span>
               <Flag size={13} /> Mark as urgent
             </button>
-          </div>
-          <div>
-            <label className="tfh-label">Assignee</label>
-            <select disabled={!canChangeAssignee} className="tfh-input" value={draft.assigneeId} onChange={(e) => setDraft({ ...draft, assigneeId: e.target.value })} style={{ opacity: canChangeAssignee ? 1 : 0.7 }}>
-              {users.map((m) => <option key={m.id} value={m.id}>{m.name}{m.role === "admin" ? " (Admin)" : m.role === "lead" ? " (Lead)" : ""}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="tfh-label">Due date</label>
-            <input type="date" disabled={!canEditFields} className="tfh-input" value={draft.due} onChange={(e) => setDraft({ ...draft, due: e.target.value })} style={{ opacity: canEditFields ? 1 : 0.7 }} />
-          </div>
-          <div>
-            <label className="tfh-label">Time <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional — for meetings/appointments)</span></label>
-            <input type="time" disabled={!canEditFields} className="tfh-input" value={draft.dueTime || ""} onChange={(e) => setDraft({ ...draft, dueTime: e.target.value })} style={{ opacity: canEditFields ? 1 : 0.7 }} />
           </div>
         </div>
 
@@ -1513,10 +1690,31 @@ const TaskListMini = ({ title, items, users, onOpen, emptyText, showAssignee }) 
 // order; untimed items follow. Only tasks can be "upcoming" — you can't log
 // activity for a day that hasn't happened yet, so that concept doesn't
 // apply to the activity-log side of this merge.
-const mergeAgenda = (tasksToday, activityBlocksToday) => {
+// A logged activity is one text block inside one person's day entry. It
+// carries no id of its own, so an agenda row keeps everything needed to
+// show it in full on click: the block itself, whose log it came from, and
+// which day. (Blocks are positional within the entry, hence blockIndex —
+// enough to identify the row for a React key without inventing ids that the
+// stored JSON doesn't have.)
+const activityItemsFrom = (logEntry, author) =>
+  ((logEntry?.content) || [])
+    .map((block, blockIndex) => ({ block, blockIndex }))
+    .filter(({ block }) => block.type === "text" && block.text?.trim())
+    .map(({ block, blockIndex }) => ({
+      time: block.time || null,
+      label: block.text,
+      kind: "activity",
+      block,
+      blockIndex,
+      logId: logEntry.id,
+      entryDate: logEntry.entryDate,
+      author,
+    }));
+
+const mergeAgenda = (tasksToday, logEntry, author) => {
   const items = [
     ...tasksToday.map((t) => ({ time: t.dueTime || null, label: t.title, kind: "task", task: t })),
-    ...activityBlocksToday.filter((b) => b.type === "text" && b.text?.trim()).map((b) => ({ time: b.time || null, label: b.text, kind: "activity" })),
+    ...activityItemsFrom(logEntry, author),
   ];
   const timed = items.filter((i) => i.time).sort((a, b) => a.time.localeCompare(b.time));
   const untimed = items.filter((i) => !i.time);
@@ -1528,13 +1726,11 @@ const shortDate = (dateStr) => new Date(dateStr + "T00:00:00").toLocaleDateStrin
 // Recently completed tasks + past (non-today) logged activity, newest
 // first — the "Past" tab's content. Activity log entries here come from a
 // wider date-range fetch, not the today-only one.
-const buildPastItems = (pastTasks, pastLogEntries) => {
+const buildPastItems = (pastTasks, pastLogEntries, author) => {
   const items = [
     ...pastTasks.map((t) => ({ dateStr: t.due, dateLabel: shortDate(t.due), label: t.title, kind: "task", task: t })),
     ...pastLogEntries.flatMap((l) =>
-      (l.content || [])
-        .filter((b) => b.type === "text" && b.text?.trim())
-        .map((b) => ({ dateStr: l.entryDate, dateLabel: shortDate(l.entryDate), label: b.text, kind: "activity" }))
+      activityItemsFrom(l, author).map((item) => ({ ...item, dateStr: l.entryDate, dateLabel: shortDate(l.entryDate) }))
     ),
   ];
   return items.sort((a, b) => b.dateStr.localeCompare(a.dateStr));
@@ -1543,19 +1739,53 @@ const buildPastItems = (pastTasks, pastLogEntries) => {
 const buildUpcomingItems = (upcomingTasks) =>
   upcomingTasks.map((t) => ({ dateStr: t.due, dateLabel: shortDate(t.due), label: t.title, kind: "task", task: t }));
 
-const AgendaRow = ({ item, onOpen }) => (
+const AgendaRow = ({ item, onOpen, onOpenActivity }) => {
+  // Both kinds of row are clickable now: a task opens the task dialog, a
+  // logged activity opens its own read-only detail (it isn't a task, so it
+  // has no dialog of its own — see ActivityDetailModal).
+  const activate =
+    item.kind === "task" ? () => onOpen(item.task)
+    : item.kind === "activity" && onOpenActivity ? () => onOpenActivity(item)
+    : null;
+
+  return (
   <div style={{ display: "flex", flexDirection: "column" }}>
     <div
-      onClick={item.kind === "task" ? () => onOpen(item.task) : undefined}
-      style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: item.kind === "task" ? "pointer" : "default" }}
+      onClick={activate || undefined}
+      onKeyDown={activate ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); } } : undefined}
+      role={activate ? "button" : undefined}
+      tabIndex={activate ? 0 : undefined}
+      className={activate ? "tfh-agenda-row" : undefined}
+      style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: activate ? "pointer" : "default" }}
     >
-      <span className="tfh-mono" style={{ fontSize: 11, color: item.time ? "var(--accent)" : item.dateLabel ? "var(--text-dim)" : "var(--text-faint)", minWidth: item.dateLabel ? 54 : 58, flexShrink: 0, marginTop: 1 }}>
+      {/* Dates get their own colour and a little weight — as plain
+          --text-faint grey they read as disabled rather than as the
+          schedule. Clock times stay brand green, so the two never blur
+          into each other. */}
+      <span
+        className="tfh-mono"
+        style={{
+          fontSize: 11.5,
+          fontWeight: item.dateLabel ? 600 : 400,
+          color: item.time ? "var(--accent)" : item.dateLabel ? "var(--date-scheduled)" : "var(--text-faint)",
+          minWidth: item.dateLabel ? 54 : 58, flexShrink: 0, marginTop: 1,
+        }}
+      >
         {item.time ? formatTimeLabel(item.time) : item.dateLabel || "Anytime"}
       </span>
       <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 12.5, color: item.kind === "task" && item.task.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{item.label}</span>
         {item.kind === "task" && <PriorityChip level={item.task.priority} />}
-        {item.kind === "activity" && <span className="tfh-chip" style={{ fontSize: 9.5, background: "var(--raised)", color: "var(--text-faint)" }}>Logged</span>}
+        {item.kind === "activity" && (
+          <span className="tfh-chip" style={{ fontSize: 9.5, background: "var(--accent-soft)", color: "var(--accent)" }}>Logged</span>
+        )}
+        {/* An activity carrying extra detail advertises it, so it's obvious
+            there's something behind the click rather than a dead row. */}
+        {item.kind === "activity" && (item.block?.notes || (item.block?.links || []).length > 0) && (
+          <span className="tfh-chip" style={{ fontSize: 9.5, background: "var(--raised)", color: "var(--text-faint)" }}>
+            {(item.block.links || []).length > 0 ? <Link2 size={9} /> : <FileText size={9} />} details
+          </span>
+        )}
         {/* When the row is date-led (upcoming/pending) but the task carries a
             clock time, surface that time on the right too — the Chief asked to
             see the time against each upcoming collab. */}
@@ -1577,16 +1807,101 @@ const AgendaRow = ({ item, onOpen }) => (
       </div>
     )}
   </div>
-);
+  );
+};
 
-const AgendaCard = ({ title, items, onOpen, emptyText }) => (
+// A logged activity has no task dialog of its own — it's a block of text
+// inside someone's day entry. This shows everything that block holds (time,
+// what was worked on, notes, project, links) plus who logged it and when,
+// read-only, with a way through to the full Collaboration Log entry.
+const ActivityDetailModal = ({ item, projects, onClose, onGoToLog }) => {
+  const block = item.block || {};
+  const links = block.links || [];
+  const projectName = projects?.find((p) => p.id === block.projectId)?.name;
+  const dayLabel = item.entryDate
+    ? new Date(`${item.entryDate}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
+    : "";
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="tfh-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="tfh-card tfh-modal-card" style={{ width: "100%", maxWidth: 480, maxHeight: "88vh", overflowY: "auto", padding: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 14 }}>
+          <div>
+            <span className="tfh-display" style={{ fontSize: 19, fontWeight: 600 }}>Logged activity</span>
+            <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>{dayLabel}</div>
+          </div>
+          <button className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={onClose} aria-label="Close"><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+          {item.author && <Avatar member={item.author} size={24} />}
+          <span style={{ fontSize: 12.5, fontWeight: 600 }}>{item.author?.name || "Team member"}</span>
+          {block.time && (
+            <span className="tfh-chip tfh-mono" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}>
+              <Clock size={10} /> {formatTimeLabel(block.time)}
+            </span>
+          )}
+          {projectName && (
+            <span className="tfh-chip" style={{ background: "var(--raised)", color: "var(--text-dim)" }}>
+              <FolderKanban size={10} /> {projectName}
+            </span>
+          )}
+        </div>
+
+        <label className="tfh-label">What was worked on</label>
+        <div style={{ fontSize: 13.5, lineHeight: 1.55, whiteSpace: "pre-wrap", background: "var(--raised)", padding: "11px 13px", borderRadius: 10, marginBottom: 14 }}>
+          {block.text}
+        </div>
+
+        {block.notes && (
+          <>
+            <label className="tfh-label">Notes from activity</label>
+            <div style={{ fontSize: 12.5, lineHeight: 1.5, whiteSpace: "pre-wrap", color: "var(--text-dim)", marginBottom: 14 }}>{block.notes}</div>
+          </>
+        )}
+
+        {links.length > 0 && (
+          <>
+            <label className="tfh-label">Links</label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+              {links.map((l, i) => (
+                <a
+                  key={i} href={l.url} target="_blank" rel="noopener noreferrer"
+                  style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: "var(--accent)", textDecoration: "none", background: "var(--raised)", padding: "8px 10px", borderRadius: 8 }}
+                >
+                  <Link2 size={12} style={{ flexShrink: 0 }} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.label || l.url}</span>
+                </a>
+              ))}
+            </div>
+          </>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+          <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 12 }} onClick={() => onGoToLog(item)}>
+            <BookOpen size={13} /> Open in Collaboration Log
+          </button>
+          <button className="tfh-btn tfh-btn-accent" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const AgendaCard = ({ title, items, onOpen, onOpenActivity, emptyText }) => (
   <div className="tfh-card" style={{ padding: 18 }}>
     <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>{title}</div>
     {items.length === 0 ? (
       <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>{emptyText}</div>
     ) : (
       <div style={{ display: "flex", flexDirection: "column" }}>
-        {items.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} />)}
+        {items.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} onOpenActivity={onOpenActivity} />)}
       </div>
     )}
   </div>
@@ -1595,7 +1910,7 @@ const AgendaCard = ({ title, items, onOpen, emptyText }) => (
 // Collapsed by default (name + a compact count), expandable on click — the
 // fix for "looks packed" once there are several team members: previously
 // every single person's full agenda rendered at once, stacking up fast.
-const TeamMemberAgenda = ({ member, items, onOpen, emptyText, onAssignTask, pendingCount }) => {
+const TeamMemberAgenda = ({ member, items, onOpen, onOpenActivity, emptyText, onAssignTask, pendingCount }) => {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -1633,7 +1948,7 @@ const TeamMemberAgenda = ({ member, items, onOpen, emptyText, onAssignTask, pend
                 const overdue = item.kind === "task" && item.task.status !== "done" && dueMeta(item.task.due, item.task.status).label.includes("overdue");
                 return (
                   <div key={i} style={overdue ? { borderLeft: "3px solid var(--pri-high)", background: "var(--pri-high-soft, rgba(179,38,30,0.08))", borderRadius: 6 } : undefined}>
-                    <AgendaRow item={item} onOpen={onOpen} />
+                    <AgendaRow item={item} onOpen={onOpen} onOpenActivity={onOpenActivity} />
                   </div>
                 );
               })}
@@ -1655,7 +1970,99 @@ const TEAM_TABS = [
   { id: "pending", label: "Pending" },
 ];
 
-const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject, onAssignTask, onGoBoard }) => {
+// "All Teams Collabs Today" — one flat, time-ordered picture of everything
+// the whole team did on ONE day, rather than per-person blocks you have to
+// expand one at a time. Deliberately a different shape from the per-member
+// tabs: the question it answers is "what happened that day", not "what is
+// this person doing".
+//
+// The day is a free date picker, not just today, so the same view answers
+// the question for any past day too. Team logs for the chosen day are
+// fetched on demand (the dashboard's standing fetch only covers the last 30
+// days), while tasks are already in memory for the whole workspace.
+const AllTeamsCollabsPanel = ({ workspaceId, day, setDay, tasks, users, currentUser, onOpen, onOpenActivity }) => {
+  const [dayLogs, setDayLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api.getTeamActivityLogs(workspaceId, day, day)
+      .then((r) => { if (!cancelled) setDayLogs(r.logs); })
+      .catch(() => { if (!cancelled) setDayLogs([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [workspaceId, day]);
+
+  const rows = useMemo(() => {
+    const byUser = new Map(users.map((u) => [u.id, u]));
+    const items = [
+      ...tasks
+        .filter((t) => t.due === day)
+        .map((t) => ({ time: t.dueTime || null, label: t.title, kind: "task", task: t, person: byUser.get(t.assigneeId) })),
+      ...dayLogs.flatMap((log) =>
+        activityItemsFrom(log, byUser.get(log.userId) || { name: log.userName, color: log.userColor, initials: log.userInitials })
+          .map((item) => ({ ...item, person: item.author }))
+      ),
+    ];
+    const timed = items.filter((i) => i.time).sort((a, b) => a.time.localeCompare(b.time));
+    const untimed = items.filter((i) => !i.time);
+    return [...timed, ...untimed];
+  }, [tasks, dayLogs, users, day]);
+
+  const doneCount = rows.filter((r) => r.kind === "activity" || r.task?.status === "done").length;
+  const peopleCount = new Set(rows.map((r) => r.person?.id).filter(Boolean)).size;
+  const isToday = day === localDateStr();
+
+  const shiftDay = (delta) => setDay(shiftDateStr(day, delta));
+
+  return (
+    <div className="tfh-card tfh-fade-in" style={{ padding: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 12.5, fontWeight: 700 }}>All Teams Collabs</div>
+          <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 2 }}>
+            {loading ? "Loading the day…" : `${rows.length} item${rows.length === 1 ? "" : "s"} across ${peopleCount} ${peopleCount === 1 ? "person" : "people"} · ${doneCount} logged or completed`}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={() => shiftDay(-1)} aria-label="Previous day"><ChevronLeft size={14} /></button>
+          <input
+            type="date" className="tfh-input" value={day} onChange={(e) => e.target.value && setDay(e.target.value)}
+            style={{ fontSize: 12, width: 150 }} aria-label="Pick a day"
+          />
+          <button className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={() => shiftDay(1)} aria-label="Next day"><ChevronRight size={14} /></button>
+          {!isToday && (
+            <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "4px 9px" }} onClick={() => setDay(localDateStr())}>Today</button>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: "18px 8px", textAlign: "center" }}><Spinner size={18} /></div>
+      ) : rows.length === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>
+          Nothing scheduled or logged by anyone on {shortDate(day)}.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {rows.map((item, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <div style={{ paddingTop: 8, flexShrink: 0 }} title={item.person?.name}>
+                <Avatar member={item.person} size={22} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <AgendaRow item={item} onOpen={onOpen} onOpenActivity={onOpenActivity} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject, onAssignTask, onGoBoard, projects, onGoActivityLog }) => {
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
   const [myLogs, setMyLogs] = useState([]);
@@ -1663,6 +2070,12 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   const [logsLoading, setLogsLoading] = useState(true);
   const [teamTab, setTeamTab] = useState("today");
   const [showPast, setShowPast] = useState(false);
+  // "All Teams Collabs" is a mode of the Team Collabs column, not a fifth
+  // per-member tab — it replaces the per-person blocks with one merged day
+  // view, and keeps its own chosen day.
+  const [allTeamsDay, setAllTeamsDay] = useState(localDateStr());
+  const [activityDetail, setActivityDetail] = useState(null);
+  const allTeamsOpen = teamTab === "all";
 
   useEffect(() => {
     let cancelled = false;
@@ -1705,13 +2118,14 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
     .filter((t) => t.assigneeId === currentUser?.id && t.status !== "done" && t.due && t.due < todayStr)
     .sort((a, b) => new Date(b.due) - new Date(a.due));
   const myTodayEntry = myLogs.find((l) => l.entryDate === todayStr);
-  const myAgenda = mergeAgenda(myTasksToday, myTodayEntry?.content || []);
+  const myAgenda = mergeAgenda(myTasksToday, myTodayEntry, currentUser);
 
   // Past activities: my completed tasks + my logged activity from before
   // today, newest first — shown only when the "Show past" filter is on.
   const myPastItems = buildPastItems(
     [...tasks].filter((t) => t.assigneeId === currentUser?.id && t.status === "done" && t.due && t.due < todayStr).sort((a, b) => new Date(b.due) - new Date(a.due)).slice(0, 15),
-    myLogs.filter((l) => l.entryDate < todayStr)
+    myLogs.filter((l) => l.entryDate < todayStr),
+    currentUser
   ).slice(0, 20);
 
   const isManager = currentUser?.role === "admin" || currentUser?.role === "lead";
@@ -1745,7 +2159,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
             <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing in the past 30 days.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column" }}>
-              {myPastItems.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} />)}
+              {myPastItems.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} onOpenActivity={setActivityDetail} />)}
             </div>
           )
         ) : (
@@ -1753,7 +2167,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
             <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing scheduled or logged for today yet.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column" }}>
-              {myAgenda.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} />)}
+              {myAgenda.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} onOpenActivity={setActivityDetail} />)}
             </div>
           )
         )}
@@ -1777,7 +2191,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
           <div style={{ display: "flex", flexDirection: "column" }}>
             {myUpcoming.map((t) => (
               <div key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: "pointer" }}>
-                <span className="tfh-mono" style={{ fontSize: 11, color: "var(--text-faint)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
+                <span className="tfh-mono" style={{ fontSize: 11.5, fontWeight: 600, color: "var(--date-scheduled)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
                 <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
                 {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(t.dueTime)}</span>}
                 <PriorityChip level={t.priority} />
@@ -1798,7 +2212,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
           <div style={{ display: "flex", flexDirection: "column" }}>
             {myPending.map((t) => (
               <div key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: "pointer" }}>
-                <span className="tfh-mono" style={{ fontSize: 11, color: "var(--pri-high)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
+                <span className="tfh-mono" style={{ fontSize: 11.5, fontWeight: 600, color: "var(--pri-high)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
                 <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
                 <PriorityChip level={t.priority} />
               </div>
@@ -1817,9 +2231,21 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   // together in every tab, not shown as two separate lists.
   const teamColumn = (
     <div style={{ flex: "1 1 53%", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, fontWeight: 700 }}>Team Collabs</span>
-        <div style={{ display: "flex", gap: 4, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 9, padding: 3 }}>
+        <div style={{ display: "flex", gap: 4, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 9, padding: 3, flexWrap: "wrap" }}>
+          {/* Sits with the tabs because it IS a mode of this column, but
+              styled as a distinct control — it swaps the per-person blocks
+              for one merged day, rather than re-filtering them. */}
+          <button
+            onClick={() => setTeamTab(allTeamsOpen ? "today" : "all")}
+            className="tfh-btn tfh-btn-ghost"
+            style={{ fontSize: 11.5, padding: "4px 10px", fontWeight: 600, background: allTeamsOpen ? "var(--accent)" : "transparent", color: allTeamsOpen ? "var(--accent-ink)" : "var(--text-dim)" }}
+            title="Everything the whole team did on one day"
+            aria-pressed={allTeamsOpen}
+          >
+            <CalendarRange size={12} /> All Teams Collabs Today
+          </button>
           {TEAM_TABS.map((t) => (
             <button
               key={t.id} onClick={() => setTeamTab(t.id)}
@@ -1832,13 +2258,21 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
         </div>
       </div>
 
-      {users.filter((u) => u.id !== currentUser?.id).map((u) => {
+      {allTeamsOpen && (
+        <AllTeamsCollabsPanel
+          workspaceId={workspaceId} day={allTeamsDay} setDay={setAllTeamsDay}
+          tasks={tasks} users={users} currentUser={currentUser}
+          onOpen={onOpen} onOpenActivity={setActivityDetail}
+        />
+      )}
+
+      {!allTeamsOpen && users.filter((u) => u.id !== currentUser?.id).map((u) => {
         let items = [];
         let emptyText = "Nothing here.";
         if (teamTab === "today") {
           const theirTasksToday = tasks.filter((t) => t.assigneeId === u.id && t.due === todayStr);
           const theirEntry = teamLogs.find((l) => l.userId === u.id && l.entryDate === todayStr);
-          items = mergeAgenda(theirTasksToday, theirEntry?.content || []);
+          items = mergeAgenda(theirTasksToday, theirEntry, u);
           emptyText = "Nothing today.";
         } else if (teamTab === "upcoming") {
           const theirUpcoming = [...tasks]
@@ -1860,13 +2294,13 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
             .sort((a, b) => new Date(b.due) - new Date(a.due))
             .slice(0, 8);
           const theirPastLogs = teamLogs.filter((l) => l.userId === u.id && l.entryDate < todayStr);
-          items = buildPastItems(theirPastTasks, theirPastLogs).slice(0, 10);
+          items = buildPastItems(theirPastTasks, theirPastLogs, u).slice(0, 10);
           emptyText = "Nothing in the past 30 days.";
         }
         if (items.length === 0 && logsLoading) return null; // avoid a flash of empty state while still loading
-        return <TeamMemberAgenda key={u.id} member={u} items={items} onOpen={onOpen} emptyText={emptyText} onAssignTask={onAssignTask} />;
+        return <TeamMemberAgenda key={u.id} member={u} items={items} onOpen={onOpen} onOpenActivity={setActivityDetail} emptyText={emptyText} onAssignTask={onAssignTask} />;
       })}
-      {!logsLoading && users.filter((u) => u.id !== currentUser?.id).length === 0 && (
+      {!allTeamsOpen && !logsLoading && users.filter((u) => u.id !== currentUser?.id).length === 0 && (
         <div className="tfh-card" style={{ padding: 18, textAlign: "center" }}>
           <div style={{ fontSize: 12, color: "var(--text-faint)" }}>No other team members yet.</div>
         </div>
@@ -1910,6 +2344,15 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
         {mineColumn}
         {teamColumn}
       </div>
+
+      {activityDetail && (
+        <ActivityDetailModal
+          item={activityDetail}
+          projects={projects}
+          onClose={() => setActivityDetail(null)}
+          onGoToLog={(item) => { setActivityDetail(null); onGoActivityLog?.(item); }}
+        />
+      )}
     </div>
   );
 };
@@ -2862,11 +3305,14 @@ const ActivityComments = ({ workspaceId, logId, currentUser, initialCount }) => 
   );
 };
 
-const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
-  const [selectedDate, setSelectedDate] = useState(() => localDateStr());
+// `focus` lets another view hand this one a starting point — the dashboard's
+// logged-activity popup uses it to jump straight to the day (and the right
+// tab: your own log vs the team's) the activity came from.
+const ActivityLogView = ({ workspaceId, currentUser, canManage, projects, focus }) => {
+  const [selectedDate, setSelectedDate] = useState(() => focus?.date || localDateStr());
   const [myLogs, setMyLogs] = useState([]);
   const [content, setContent] = useState([]);
-  const [tab, setTab] = useState("mine");
+  const [tab, setTab] = useState(focus?.tab || "mine");
   const [teamLogs, setTeamLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [teamLoading, setTeamLoading] = useState(false);
@@ -2890,6 +3336,15 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects }) => {
     }
   };
   useEffect(() => { loadMine(); }, [workspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A new focus (a fresh click from the dashboard, even onto the same view)
+  // re-points the day/tab. Keyed on focus.token so clicking the same
+  // activity twice still works.
+  useEffect(() => {
+    if (!focus) return;
+    if (focus.date) setSelectedDate(focus.date);
+    if (focus.tab) setTab(focus.tab);
+  }, [focus?.token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const existing = myLogs.find((l) => l.entryDate === selectedDate);
@@ -4118,8 +4573,25 @@ const CreateWorkspaceScreen = () => {
 // pages need, so clicking a project here is the single way to move
 // between projects (previously this and a separate switcher dropdown
 // overlapped; consolidated into just this one).
+const PROJECT_LIST_OPEN_KEY = "pmdamc.sidebar.projectsOpen";
+
 const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManage, onCreateProject, onReorder }) => {
+  // Collapsed by default — the list opens on demand (see the render below).
+  // A project is almost always selected, so "open it because you're in a
+  // project" would mean always open, which is the problem this solves.
+  // Instead the user's own last choice is remembered, per browser.
+  const [expanded, setExpanded] = useState(() => {
+    try { return localStorage.getItem(PROJECT_LIST_OPEN_KEY) === "1"; } catch { return false; }
+  });
   const [showCompleted, setShowCompleted] = useState(false);
+
+  const setExpandedPersisted = (next) => {
+    setExpanded((prev) => {
+      const value = typeof next === "function" ? next(prev) : next;
+      try { localStorage.setItem(PROJECT_LIST_OPEN_KEY, value ? "1" : "0"); } catch { /* private mode — in-memory only */ }
+      return value;
+    });
+  };
   const [dragId, setDragId] = useState(null);
   const [order, setOrder] = useState(null); // local optimistic order of active-project ids while dragging
 
@@ -4154,14 +4626,35 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 0.5, padding: "0 10px", marginBottom: 4 }}>Projects</div>
-      <button
-        onClick={() => onSelectProject("all")}
-        className={`tfh-nav-item ${activeFilter === "all" ? "active" : ""}`}
-        style={{ fontSize: 12.5, padding: "7px 10px" }}
-      >
-        <FolderKanban size={13} /> All projects
-      </button>
-      {orderedActive.map((p) => (
+      {/* The full project list was pushing everything else out of the
+          sidebar once there were a dozen or more, so it now lives behind
+          "All projects": the row selects the all-projects filter AND opens
+          the list; the chevron alone opens/closes it without changing what
+          you're looking at. It auto-opens when a specific project is
+          selected, so you can always see where you are. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+        <button
+          onClick={() => { onSelectProject("all"); setExpandedPersisted(true); }}
+          className={`tfh-nav-item ${activeFilter === "all" ? "active" : ""}`}
+          style={{ fontSize: 12.5, padding: "7px 10px", flex: 1, minWidth: 0 }}
+        >
+          <FolderKanban size={13} /> All projects
+          {active.length > 0 && (
+            <span className="tfh-mono" style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--text-faint)" }}>{active.length}</span>
+          )}
+        </button>
+        <button
+          onClick={() => setExpandedPersisted((e) => !e)}
+          className="tfh-btn tfh-btn-ghost"
+          style={{ padding: 5, flexShrink: 0 }}
+          aria-label={expanded ? "Hide the project list" : "Show the project list"}
+          aria-expanded={expanded}
+          title={expanded ? "Hide the project list" : "Show the project list"}
+        >
+          {expanded ? <ChevronUp size={13} color="var(--text-faint)" /> : <ChevronDown size={13} color="var(--text-faint)" />}
+        </button>
+      </div>
+      {expanded && orderedActive.map((p) => (
         <button
           key={p.id} onClick={() => onSelectProject(p.id)}
           draggable={canManage}
@@ -4177,7 +4670,7 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
         </button>
       ))}
-      {completed.length > 0 && (
+      {expanded && completed.length > 0 && (
         <>
           <button
             onClick={() => setShowCompleted((s) => !s)}
@@ -4198,7 +4691,7 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
           ))}
         </>
       )}
-      {canManage && (
+      {expanded && canManage && (
         <div style={{ padding: "6px 10px 0" }}>
           <NewProjectButton onCreateProject={onCreateProject} />
         </div>
@@ -4397,6 +4890,7 @@ function Workspace() {
     if (projectId && projectId !== projectFilter) setProjectFilter(projectId);
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [draft, setDraft] = useState(null);
+  const [activityFocus, setActivityFocus] = useState(null); // {date, tab, token} — see goToActivityLog
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -4480,6 +4974,18 @@ function Workspace() {
   const openEditById = (id) => { const t = tasks.find((x) => x.id === id); if (t) openEdit(t); };
   const closeDialog = () => { setDraft(null); setSaveError(""); };
 
+  // "Open in Collaboration Log" from a logged-activity popup. The token
+  // makes each click a distinct focus even when the day and tab repeat, so
+  // the Activity view re-points every time rather than only on the first.
+  const goToActivityLog = (item) => {
+    setActivityFocus({
+      date: item.entryDate,
+      tab: item.author?.id === user.id ? "mine" : "team",
+      token: Date.now(),
+    });
+    setView("activity");
+  };
+
   const saveDraft = async () => {
     if (!draft.title.trim()) return;
     if (!draft.projectId) { setSaveError("Choose which project this task belongs to."); return; }
@@ -4515,6 +5021,12 @@ function Workspace() {
           : isOwnTask
             ? { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, due: draft.due, dueTime: draft.dueTime || null }
             : { status: draft.status };
+        // The repeat rule only ever travels on the series head — the server
+        // rejects it on an occurrence, and sending it unchanged from one
+        // would be a pointless round trip anyway.
+        if ((canManage || isOwnTask) && !draft.recurrenceParentId) {
+          patch.recurrence = draft.recurrence || null;
+        }
         // If the project was changed (fixing a mis-file), include it — but
         // the API call must still go to the ORIGINAL project's path, since
         // that's where the task currently lives until the move lands.
@@ -4531,9 +5043,10 @@ function Workspace() {
         // atomically with the task server-side); pendingFiles can't — those
         // upload as a real follow-up request right below, once the task has
         // an id to attach to.
-        const { title, description, status, priority, assigneeId, due, dueTime } = draft;
+        const { title, description, status, priority, assigneeId, due, dueTime, recurrence } = draft;
         const { task } = await api.createTask(currentId, taskProjectId, {
           title, description, status, priority, assigneeId, due, dueTime,
+          recurrence: recurrence || null,
           subtasks: cleanSubtasks, links: draft.pendingLinks,
         });
         savedTask = task;
@@ -4568,6 +5081,12 @@ function Workspace() {
           setSaveError(`Saved, but ${failed.length === 1 ? "this didn't" : "these didn't"} upload: ${failed.join(", ")}. You can try adding ${failed.length === 1 ? "it" : "them"} again below.`);
           return;
         }
+      } else if (draft.recurrence || savedTask.recurrence) {
+        // A repeat rule creates or removes sibling occurrences server-side,
+        // so patching the single saved task into local state isn't enough —
+        // refetch so the board/calendar show the whole series right away.
+        const { tasks: refreshed } = await api.getAllTasks(currentId);
+        setTasks(refreshed);
       } else if (draft.id) {
         setTasks((prev) => prev.map((t) => (t.id === savedTask.id ? savedTask : t)));
       } else {
@@ -4775,7 +5294,14 @@ function Workspace() {
         </div>
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
-          {view === "dashboard" && <DashboardView workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} hasProject={!!projectId} onCreateProject={createProject} onAssignTask={openCreateFor} onGoBoard={(status) => { setStatusFilter(status); setView("board"); }} />}
+          {view === "dashboard" && (
+            <DashboardView
+              workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} projects={projects}
+              onOpen={openEdit} hasProject={!!projectId} onCreateProject={createProject} onAssignTask={openCreateFor}
+              onGoBoard={(status) => { setStatusFilter(status); setView("board"); }}
+              onGoActivityLog={goToActivityLog}
+            />
+          )}
           {view === "board" && (
             <BoardView
               tasks={tasks} users={users} projects={projects} onOpen={openEdit} onComplete={completeTask} onReopen={reopenTask} onAdd={openCreate} onBulkAdd={() => setBulkAddOpen(true)} onCreateProject={createProject} canManage={canManage} currentUserId={user.id}
@@ -4787,7 +5313,7 @@ function Workspace() {
             />
           )}
           {view === "team" && <TeamView tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} onSetRole={setRole} onSetTitle={setTitle} onRemoveMember={removeMember} onInvite={invite} canManage={canManage} workspaceId={currentId} projects={projects} onSetProjectLead={setProjectLeadFor} />}
-          {view === "activity" && <ActivityLogView workspaceId={currentId} currentUser={currentUser} canManage={canManage} projects={projects} />}
+          {view === "activity" && <ActivityLogView workspaceId={currentId} currentUser={currentUser} canManage={canManage} projects={projects} focus={activityFocus} />}
           {view === "calendar" && <CalendarView tasks={tasks} users={users} onOpen={openEdit} workspaceId={currentId} canManage={canManage} />}
           {view === "files" && <DocumentsView workspaceId={currentId} projectId={projectId} projectName={currentProject?.name} canManage={canManageProject} />}
           {view === "milestones" && (

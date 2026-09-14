@@ -6,6 +6,43 @@ A real, deployable task board with proper hierarchy: **workspaces** contain
 boundary below is enforced by the server, not just hidden in the UI, and
 was tested live before being shipped.
 
+## What's new in this round — correction log #6
+
+- **Recurring activities.** A task can now repeat: daily, every weekday,
+  weekly on any set of days (every Thursday, Tue+Thu, every 2 weeks…), or
+  monthly on the same date, with an optional end date. Occurrences are real
+  task rows, not virtual entries, so each one can be completed, commented
+  on, reassigned and attached to like any other task, and the board,
+  calendar and reminders needed no changes to handle them. The rule lives
+  on the first task of the series; occurrences are generated up to 60 days
+  ahead, immediately on save and again on an hourly sweep. Changing a rule
+  clears future occurrences nobody has touched yet and rebuilds them —
+  occurrences that already have comments, files or ticked subtasks are left
+  alone. Deleting the first activity hands the rule to the next one instead
+  of taking the series with it.
+- **"All Teams Collabs Today"** — one button on Team Collabs that swaps the
+  per-person blocks for a single time-ordered list of everything the whole
+  team did on one day, each row showing who it belongs to. The day is a
+  picker with prev/next, so it answers the same question for any past day,
+  not only today.
+- **Logged activities are clickable.** A "Logged" row on Today's Collabs now
+  opens its full detail — time, what was worked on, notes, project and any
+  links — plus a jump straight to that day in the Collaboration Log. Rows
+  also have a real hover and keyboard focus state, so it's visible that
+  they do something.
+- **Activity dates are legible again.** Dates on Upcoming/Pending/Past rows
+  were plain faint grey and read as disabled; they now have their own
+  colour token (`--date-scheduled`, defined per theme) and a little weight,
+  kept distinct from the green used for clock times.
+- **New task dialog reordered** — Assignee, Due date and Time now sit
+  directly under "Add subtask", above the filing details (project, stage,
+  priority) people change far less often.
+- **Sidebar project list is collapsed by default.** "All projects" stays
+  visible with a count; clicking it opens the list (and selects the
+  all-projects filter), and the chevron opens/closes it without changing
+  what you're looking at. Your choice is remembered per browser.
+
+## Previously shipped
 ## What's new in this round — pre-deployment QA pass
 
 - **Found and fixed a real, launch-blocking bug**: the task dialog's footer
@@ -496,4 +533,3 @@ ALTER TABLE public.project_documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.password_resets ENABLE ROW LEVEL SECURITY;
 ```
-
