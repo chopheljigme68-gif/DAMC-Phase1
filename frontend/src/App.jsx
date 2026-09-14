@@ -1736,8 +1736,12 @@ const buildPastItems = (pastTasks, pastLogEntries, author) => {
   return items.sort((a, b) => b.dateStr.localeCompare(a.dateStr));
 };
 
-const buildUpcomingItems = (upcomingTasks) =>
-  upcomingTasks.map((t) => ({ dateStr: t.due, dateLabel: shortDate(t.due), label: t.title, kind: "task", task: t }));
+// dateTone lets a caller colour the date column for what the list MEANS —
+// overdue dates in the priority red, completed ones in the done colour —
+// rather than every date-led list looking identical. Defaults to the normal
+// scheduled-date colour.
+const buildUpcomingItems = (upcomingTasks, dateTone) =>
+  upcomingTasks.map((t) => ({ dateStr: t.due, dateLabel: shortDate(t.due), label: t.title, kind: "task", task: t, dateTone }));
 
 const AgendaRow = ({ item, onOpen, onOpenActivity }) => {
   // Both kinds of row are clickable now: a task opens the task dialog, a
@@ -1767,7 +1771,7 @@ const AgendaRow = ({ item, onOpen, onOpenActivity }) => {
         style={{
           fontSize: 11.5,
           fontWeight: item.dateLabel ? 600 : 400,
-          color: item.time ? "var(--accent)" : item.dateLabel ? "var(--date-scheduled)" : "var(--text-faint)",
+          color: item.time ? "var(--accent)" : item.dateLabel ? (item.dateTone || "var(--date-scheduled)") : "var(--text-faint)",
           minWidth: item.dateLabel ? 54 : 58, flexShrink: 0, marginTop: 1,
         }}
       >
@@ -1970,6 +1974,20 @@ const TEAM_TABS = [
   { id: "pending", label: "Pending" },
 ];
 
+// The same idea applied to my own column. Two tabs beyond the team's set:
+// "Complete" (everything I've finished, newest first — this used to be a
+// button that jumped to the Board) and a "Past" that, as in Team Collabs,
+// is the diary — finished tasks AND logged activity from before today —
+// whereas Complete is tasks only, today's included. Different questions,
+// different tabs.
+const MY_TABS = [
+  { id: "past", label: "Past" },
+  { id: "today", label: "Today" },
+  { id: "upcoming", label: "Upcoming" },
+  { id: "pending", label: "Pending" },
+  { id: "complete", label: "Complete" },
+];
+
 // "All Teams Collabs Today" — one flat, time-ordered picture of everything
 // the whole team did on ONE day, rather than per-person blocks you have to
 // expand one at a time. Deliberately a different shape from the per-member
@@ -2062,14 +2080,14 @@ const AllTeamsCollabsPanel = ({ workspaceId, day, setDay, tasks, users, currentU
   );
 };
 
-const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject, onAssignTask, onGoBoard, projects, onGoActivityLog }) => {
+const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject, onAssignTask, projects, onGoActivityLog }) => {
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
   const [myLogs, setMyLogs] = useState([]);
   const [teamLogs, setTeamLogs] = useState([]); // wide range: last 30 days through today
   const [logsLoading, setLogsLoading] = useState(true);
   const [teamTab, setTeamTab] = useState("today");
-  const [showPast, setShowPast] = useState(false);
+  const [myTab, setMyTab] = useState("today");
   // "All Teams Collabs" is a mode of the Team Collabs column, not a fifth
   // per-member tab — it replaces the per-person blocks with one merged day
   // view, and keeps its own chosen day.
@@ -2107,10 +2125,10 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   const todayStr = localDateStr();
 
   const myTasksToday = tasks.filter((t) => t.assigneeId === currentUser?.id && t.due === todayStr);
+  // No longer capped at 6 — it has a tab of its own now, not a preview card.
   const myUpcoming = [...tasks]
     .filter((t) => t.assigneeId === currentUser?.id && t.status !== "done" && t.due && t.due > todayStr)
-    .sort((a, b) => new Date(a.due) - new Date(b.due))
-    .slice(0, 6);
+    .sort((a, b) => new Date(a.due) - new Date(b.due));
   // "Pending works" — my tasks that are past due but still not done. These
   // are the things that have slipped and need catching up on, distinct from
   // "upcoming" (future) and "today".
@@ -2120,8 +2138,16 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   const myTodayEntry = myLogs.find((l) => l.entryDate === todayStr);
   const myAgenda = mergeAgenda(myTasksToday, myTodayEntry, currentUser);
 
+  // Everything I've finished, newest first — the "Complete" tab. Unlike
+  // "Past" this is tasks only and includes ones completed today, which is
+  // what the old Complete button showed on the Board.
+  const myComplete = [...tasks]
+    .filter((t) => t.assigneeId === currentUser?.id && t.status === "done" && t.due)
+    .sort((a, b) => new Date(b.due) - new Date(a.due))
+    .slice(0, 50);
+
   // Past activities: my completed tasks + my logged activity from before
-  // today, newest first — shown only when the "Show past" filter is on.
+  // today, newest first — the diary view.
   const myPastItems = buildPastItems(
     [...tasks].filter((t) => t.assigneeId === currentUser?.id && t.status === "done" && t.due && t.due < todayStr).sort((a, b) => new Date(b.due) - new Date(a.due)).slice(0, 15),
     myLogs.filter((l) => l.entryDate < todayStr),
@@ -2130,97 +2156,66 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
 
   const isManager = currentUser?.role === "admin" || currentUser?.role === "lead";
 
+  // One card, one tab strip — the same control the Team Collabs column uses,
+  // applied to my own work. Replaces the previous three stacked cards plus
+  // two "Complete"/"Pending" buttons that jumped to the Board: a click now
+  // swaps the list in place and never navigates away.
+  let myItems = [];
+  let myEmptyText = "Nothing here.";
+  if (myTab === "today") {
+    myItems = myAgenda;
+    myEmptyText = "Nothing scheduled or logged for today yet.";
+  } else if (myTab === "upcoming") {
+    myItems = buildUpcomingItems(myUpcoming);
+    myEmptyText = "Nothing upcoming.";
+  } else if (myTab === "pending") {
+    myItems = buildUpcomingItems(myPending, "var(--pri-high)");
+    myEmptyText = "Nothing overdue — you're all caught up.";
+  } else if (myTab === "complete") {
+    myItems = buildUpcomingItems(myComplete, "var(--stage-done)");
+    myEmptyText = "Nothing completed yet.";
+  } else {
+    myItems = myPastItems;
+    myEmptyText = "Nothing in the past 30 days.";
+  }
+
   const mineColumn = (
     <div style={{ display: "flex", flexDirection: "column", gap: 18, flex: "1 1 45%", minWidth: 0 }}>
       <div className="tfh-card" style={{ padding: 18 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12.5, fontWeight: 700 }}>{showPast ? "My Past Collabs" : "My Today's Collabs"}</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {/* Quick jumps to the Board, pre-filtered — Complete → shipped
-                list, Pending → overdue list. Board stays in the nav; these
-                are just shortcuts. */}
-            <button onClick={() => onGoBoard("shipped")} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 9px", color: "var(--stage-done)" }} title="See completed collabs on the board">
-              <CheckCircle2 size={12} /> Complete
-            </button>
-            <button onClick={() => onGoBoard("overdue")} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 9px", color: "var(--pri-high)" }} title="See pending (overdue) collabs on the board">
-              <Clock size={12} /> Pending
-            </button>
-            <button
-              onClick={() => setShowPast((s) => !s)}
-              className="tfh-btn tfh-btn-ghost"
-              style={{ fontSize: 11, padding: "3px 9px", background: showPast ? "var(--accent-soft)" : "transparent", color: showPast ? "var(--accent)" : "var(--text-dim)" }}
-            >
-              {showPast ? "Show today" : "Show past"}
-            </button>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>My Collabs</span>
+          <div style={{ display: "flex", gap: 4, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 9, padding: 3, flexWrap: "wrap" }}>
+            {MY_TABS.map((t) => {
+              const active = myTab === t.id;
+              // Pending carries its own count — the one number worth seeing
+              // without opening the tab, since it's what has slipped.
+              const badge = t.id === "pending" && myPending.length > 0 ? myPending.length : null;
+              return (
+                <button
+                  key={t.id} onClick={() => setMyTab(t.id)}
+                  className="tfh-btn tfh-btn-ghost"
+                  style={{ fontSize: 11.5, padding: "4px 10px", background: active ? "var(--accent-soft)" : "transparent", color: active ? "var(--accent)" : "var(--text-dim)" }}
+                  aria-pressed={active}
+                >
+                  {t.label}
+                  {badge && <span style={{ marginLeft: 5, fontSize: 11, fontWeight: 800, color: "var(--pri-high)" }}>{badge}</span>}
+                </button>
+              );
+            })}
           </div>
         </div>
-        {showPast ? (
-          myPastItems.length === 0 ? (
-            <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing in the past 30 days.</div>
+        {/* A floor under the list so switching tabs doesn't make the card
+            (and everything below it) jump around as list lengths change. */}
+        <div style={{ minHeight: 150 }}>
+          {myItems.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>{myEmptyText}</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              {myPastItems.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} onOpenActivity={setActivityDetail} />)}
+            <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column" }}>
+              {myItems.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} onOpenActivity={setActivityDetail} />)}
             </div>
-          )
-        ) : (
-          myAgenda.length === 0 ? (
-            <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing scheduled or logged for today yet.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              {myAgenda.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} onOpenActivity={setActivityDetail} />)}
-            </div>
-          )
-        )}
-      </div>
-
-      <div className="tfh-card" style={{ padding: 18 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12.5, fontWeight: 700 }}>Upcoming Collabs</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <button onClick={() => onGoBoard("shipped")} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 9px", color: "var(--stage-done)" }} title="See completed collabs on the board">
-              <CheckCircle2 size={12} /> Complete
-            </button>
-            <button onClick={() => onGoBoard("overdue")} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 9px", color: "var(--pri-high)" }} title="See pending (overdue) collabs on the board">
-              <Clock size={12} /> Pending
-            </button>
-          </div>
+          )}
         </div>
-        {myUpcoming.length === 0 ? (
-          <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing upcoming.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {myUpcoming.map((t) => (
-              <div key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: "pointer" }}>
-                <span className="tfh-mono" style={{ fontSize: 11.5, fontWeight: 600, color: "var(--date-scheduled)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
-                <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
-                {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(t.dueTime)}</span>}
-                <PriorityChip level={t.priority} />
-              </div>
-            ))}
-          </div>
-        )}
       </div>
-
-      <div className="tfh-card" style={{ padding: 18 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <span style={{ fontSize: 12.5, fontWeight: 700 }}>Pending Collabs</span>
-          {myPending.length > 0 && <span className="tfh-chip" style={{ fontSize: 10, background: "var(--pri-high)", color: "#fff" }}>{myPending.length}</span>}
-        </div>
-        {myPending.length === 0 ? (
-          <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing overdue — you're all caught up.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {myPending.map((t) => (
-              <div key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: "pointer" }}>
-                <span className="tfh-mono" style={{ fontSize: 11.5, fontWeight: 600, color: "var(--pri-high)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
-                <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
-                <PriorityChip level={t.priority} />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
     </div>
   );
 
@@ -2286,7 +2281,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
           const theirPending = [...tasks]
             .filter((t) => t.assigneeId === u.id && t.status !== "done" && t.due && t.due < todayStr)
             .sort((a, b) => new Date(a.due) - new Date(b.due));
-          items = buildUpcomingItems(theirPending);
+          items = buildUpcomingItems(theirPending, "var(--pri-high)");
           emptyText = "Nothing pending — all caught up.";
         } else {
           const theirPastTasks = tasks
@@ -5298,7 +5293,6 @@ function Workspace() {
             <DashboardView
               workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} projects={projects}
               onOpen={openEdit} hasProject={!!projectId} onCreateProject={createProject} onAssignTask={openCreateFor}
-              onGoBoard={(status) => { setStatusFilter(status); setView("board"); }}
               onGoActivityLog={goToActivityLog}
             />
           )}
