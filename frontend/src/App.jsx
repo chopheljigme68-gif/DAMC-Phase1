@@ -1596,6 +1596,83 @@ const BulkAddModal = ({ users, projects, currentProjectId, currentUserId, onClos
 /* ------------------------------------------------------------------ */
 /* Notification bell                                                    */
 /* ------------------------------------------------------------------ */
+// The account control, in the top bar next to Quick add / notifications /
+// theme — where every other app puts it, and where there's room for the
+// full name. It used to be a block pinned to the bottom of the sidebar,
+// which truncated long names to "Sangay Thi…" and put Sign out one
+// mis-click away from the profile button.
+//
+// Same dropdown mechanics as NotificationBell above (click-outside +
+// Escape), deliberately — two popovers in one bar behaving differently
+// would be worse than the small duplication.
+const AccountMenu = ({ member, authUser, onEditProfile, onSignOut }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onClick); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  const act = (fn) => { setOpen(false); fn(); };
+
+  return (
+    <div style={{ position: "relative" }} ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`tfh-account-trigger ${open ? "open" : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={member?.name}
+      >
+        <Avatar member={member} size={26} />
+        {/* Name hides on narrow screens — the avatar alone is the control
+            there, rather than an ellipsised name taking the whole bar. */}
+        <span className="tfh-hide-mobile tfh-account-name">{member?.name}</span>
+        <ChevronDown size={13} color="var(--text-faint)" style={{ flexShrink: 0, transition: "transform 0.15s ease", transform: open ? "rotate(180deg)" : "none" }} />
+      </button>
+
+      {open && (
+        <div className="tfh-card tfh-fade-in" role="menu" style={{ position: "absolute", right: 0, top: 44, width: 268, zIndex: 30, padding: 0, overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "14px 14px 13px", borderBottom: "1px solid var(--line)" }}>
+            <Avatar member={member} size={38} />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              {/* Full name, wrapping rather than truncating — the reason
+                  this moved out of the sidebar in the first place. */}
+              <div style={{ fontSize: 13.5, fontWeight: 700, lineHeight: 1.3 }}>{member?.name}</div>
+              {member?.title && <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 1 }}>{member.title}</div>}
+              {authUser?.email && (
+                <div className="tfh-mono" style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {authUser.email}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {member?.role && (
+            <div style={{ padding: "10px 14px 0" }}>
+              <RoleBadge role={member.role} />
+            </div>
+          )}
+
+          <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 2 }}>
+            <button role="menuitem" className="tfh-account-item" onClick={() => act(onEditProfile)}>
+              <Pencil size={14} /> Edit profile
+            </button>
+            <button role="menuitem" className="tfh-account-item danger" onClick={() => act(onSignOut)}>
+              <LogOut size={14} /> Sign out
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const NotificationBell = ({ notifications, onOpenTask, onMarkRead, onMarkAll, permission, onRequestPermission }) => {
   const [open, setOpen] = useState(false);
   const unread = notifications.filter((n) => !n.read).length;
@@ -5236,18 +5313,9 @@ function Workspace() {
           ))}
         </nav>
 
-        <div style={{ marginTop: "auto", padding: 12, borderRadius: 12, background: "var(--panel)", border: "1px solid var(--line)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <button type="button" onClick={() => setEditProfileOpen(true)} style={{ display: "flex", alignItems: "center", gap: 9, flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }} title="Edit profile">
-              <Avatar member={currentUser} size={30} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{currentUser.name}</div>
-                <div style={{ fontSize: 11, color: "var(--text-faint)" }}>{currentUser.title}</div>
-              </div>
-            </button>
-            <button className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={logout} aria-label="Sign out"><LogOut size={14} /></button>
-          </div>
-        </div>
+        {/* The account block that used to live here has moved to the top
+            bar (see AccountMenu) — it truncated long names down here, and
+            the top-right is where people look for it. */}
       </div>
 
       {editProfileOpen && (
@@ -5285,6 +5353,13 @@ function Workspace() {
             <button className="tfh-btn tfh-btn-ghost" style={{ padding: 8 }} onClick={toggle} aria-label="Toggle theme">
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </button>
+            <div style={{ width: 1, height: 22, background: "var(--line)", margin: "0 2px", flexShrink: 0 }} />
+            <AccountMenu
+              member={currentUser}
+              authUser={user}
+              onEditProfile={() => setEditProfileOpen(true)}
+              onSignOut={logout}
+            />
           </div>
         </div>
 
