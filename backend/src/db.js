@@ -100,6 +100,19 @@ async function getWorkspaceById(id) {
   return rows[0] || null;
 }
 
+// Renaming a workspace deliberately leaves the slug alone. The slug is an
+// identifier other rows and links hang off; changing it to follow a display
+// name would break anything already pointing at the old one for no benefit,
+// since nothing user-facing shows it.
+async function renameWorkspace(id, name) {
+  const { rows } = await pool.query(
+    `UPDATE workspaces SET name = $2 WHERE id = $1
+     RETURNING id, name, slug, created_at AS "createdAt"`,
+    [id, name]
+  );
+  return rows[0] || null;
+}
+
 async function createWorkspace({ name, createdBy }) {
   const client = await pool.connect();
   try {
@@ -549,7 +562,9 @@ const TASK_SELECT = `
     t.workspace_id AS "workspaceId", t.project_id AS "projectId", MAX(p.name) AS "projectName",
     to_char(t.due, 'YYYY-MM-DD') AS due,
     to_char(t.due_time, 'HH24:MI') AS "dueTime",
+    to_char(t.end_time, 'HH24:MI') AS "endTime",
     t.recurrence, t.recurrence_parent_id AS "recurrenceParentId",
+    COALESCE(ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(t.recurrence_exdates) d), '{}') AS "exDates",
     t.created_at AS "createdAt", t.completed_at AS "completedAt", t.updated_at AS "updatedAt",
     COALESCE(
       json_agg(json_build_object(
@@ -606,12 +621,13 @@ async function createTask(data) {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `INSERT INTO tasks (title, description, status, priority, assignee_id, created_by, due, due_time, workspace_id, project_id, recurrence, recurrence_parent_id, completed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $3 = 'done' THEN now() ELSE NULL END)
+      `INSERT INTO tasks (title, description, status, priority, assignee_id, created_by, due, due_time, end_time, workspace_id, project_id, recurrence, recurrence_parent_id, completed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CASE WHEN $3 = 'done' THEN now() ELSE NULL END)
        RETURNING id`,
       [
         data.title, data.description || "", data.status || "todo", data.priority || "medium",
-        data.assigneeId, data.createdBy || null, data.due || null, data.dueTime || null, data.workspaceId, data.projectId,
+        data.assigneeId, data.createdBy || null, data.due || null, data.dueTime || null, data.endTime || null,
+        data.workspaceId, data.projectId,
         data.recurrence ? JSON.stringify(data.recurrence) : null, data.recurrenceParentId || null,
       ]
     );
@@ -650,7 +666,7 @@ async function updateTask(id, patch) {
   const fields = [];
   const values = [];
   let i = 1;
-  const columnMap = { title: "title", description: "description", status: "status", priority: "priority", assigneeId: "assignee_id", due: "due", dueTime: "due_time", projectId: "project_id" };
+  const columnMap = { title: "title", description: "description", status: "status", priority: "priority", assigneeId: "assignee_id", due: "due", dueTime: "due_time", endTime: "end_time", projectId: "project_id" };
   for (const [key, col] of Object.entries(columnMap)) {
     if (patch[key] !== undefined) {
       fields.push(`${col} = $${i++}`);
@@ -752,7 +768,9 @@ async function getActiveRecurringHeads() {
     `SELECT t.id, t.title, t.description, t.priority, t.assignee_id AS "assigneeId",
             t.created_by AS "createdBy", t.workspace_id AS "workspaceId", t.project_id AS "projectId",
             to_char(t.due, 'YYYY-MM-DD') AS due, to_char(t.due_time, 'HH24:MI') AS "dueTime",
-            t.recurrence
+            to_char(t.end_time, 'HH24:MI') AS "endTime",
+            t.recurrence,
+            COALESCE(ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(t.recurrence_exdates) d), '{}') AS "exDates"
      FROM tasks t
      WHERE t.recurrence IS NOT NULL
        AND t.recurrence_parent_id IS NULL
@@ -793,14 +811,14 @@ async function createRecurrenceOccurrence(head, due, subtasks) {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `INSERT INTO tasks (title, description, status, priority, assignee_id, created_by, due, due_time,
+      `INSERT INTO tasks (title, description, status, priority, assignee_id, created_by, due, due_time, end_time,
                           workspace_id, project_id, recurrence_parent_id)
-       VALUES ($1, $2, 'todo', $3, $4, $5, $6, $7, $8, $9, $10)
+       VALUES ($1, $2, 'todo', $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (recurrence_parent_id, due) WHERE recurrence_parent_id IS NOT NULL DO NOTHING
        RETURNING id`,
       [
         head.title, head.description || "", head.priority || "medium", head.assigneeId, head.createdBy || null,
-        due, head.dueTime || null, head.workspaceId, head.projectId, head.id,
+        due, head.dueTime || null, head.endTime || null, head.workspaceId, head.projectId, head.id,
       ]
     );
     if (rows.length === 0) { await client.query("ROLLBACK"); return null; }
@@ -843,6 +861,30 @@ async function deleteUntouchedFutureOccurrences(headId, fromDate) {
   return rows.length;
 }
 
+// Records a date the generator must never recreate for this series. This is
+// what makes deleting a single occurrence stick: without it the next sweep
+// saw a gap in the series and refilled it, so the activity came back and
+// looked impossible to remove.
+async function addRecurrenceException(headId, due) {
+  if (!headId || !due) return;
+  await pool.query(
+    `UPDATE tasks
+     SET recurrence_exdates = (
+       SELECT ARRAY(SELECT DISTINCT unnest(recurrence_exdates || $2::date) ORDER BY 1)
+     )
+     WHERE id = $1`,
+    [headId, due]
+  );
+}
+
+// Turns a whole series off from ANY of its tasks: clears the rule on the
+// head so nothing more is generated. Used by "Stop repeating", which a user
+// can now hit from an occurrence in the middle of the series rather than
+// having to hunt down the first one.
+async function stopSeries(headId) {
+  await pool.query(`UPDATE tasks SET recurrence = NULL, updated_at = now() WHERE id = $1`, [headId]);
+}
+
 // Before deleting a series head, hand the rule to the next occurrence and
 // repoint the rest at it. Without this, the ON DELETE CASCADE on
 // recurrence_parent_id would take the entire series down with the first
@@ -853,7 +895,7 @@ async function promoteNextSeriesHead(headId) {
   try {
     await client.query("BEGIN");
     const { rows: heads } = await client.query(
-      `SELECT recurrence FROM tasks WHERE id = $1 AND recurrence IS NOT NULL AND recurrence_parent_id IS NULL`,
+      `SELECT recurrence, recurrence_exdates FROM tasks WHERE id = $1 AND recurrence IS NOT NULL AND recurrence_parent_id IS NULL`,
       [headId]
     );
     if (heads.length === 0) { await client.query("ROLLBACK"); return null; }
@@ -865,9 +907,12 @@ async function promoteNextSeriesHead(headId) {
     if (next.length === 0) { await client.query("ROLLBACK"); return null; }
 
     const newHeadId = next[0].id;
+    // The exception list belongs to the series, not to the row that
+    // happened to be holding it — carry it across, or previously-deleted
+    // occurrences would come back the moment the head changed.
     await client.query(
-      `UPDATE tasks SET recurrence = $2, recurrence_parent_id = NULL, updated_at = now() WHERE id = $1`,
-      [newHeadId, heads[0].recurrence]
+      `UPDATE tasks SET recurrence = $2, recurrence_exdates = $3, recurrence_parent_id = NULL, updated_at = now() WHERE id = $1`,
+      [newHeadId, heads[0].recurrence, heads[0].recurrence_exdates || []]
     );
     await client.query(
       `UPDATE tasks SET recurrence_parent_id = $2 WHERE recurrence_parent_id = $1 AND id <> $2`,
@@ -1384,7 +1429,7 @@ module.exports = {
   getUserById, getUserByEmail, createUser, updateUserPassword, ensurePlatformAdminFromEnv, updateUserAvatar, updateUserProfile,
   pingDb,
   createPasswordReset, getValidPasswordReset, consumePasswordReset,
-  getWorkspacesForUser, getWorkspaceById, createWorkspace,
+  getWorkspacesForUser, getWorkspaceById, createWorkspace, renameWorkspace,
   getMembership, getWorkspaceMembers, countAdmins, addWorkspaceMember, setMemberRole, updateMemberTitle, removeMember,
   getWorkspaceWorkload,
   createInvite, getPendingInvitesForEmail, acceptInvite,
@@ -1396,6 +1441,7 @@ module.exports = {
   getTasks, getAllTasksForWorkspace, getTaskById, createTask, updateTask, replaceSubtasks, deleteTask, getSubtaskById,
   getActiveRecurringHeads, getSeriesOccurrenceDates, getSeriesTemplateSubtasks, createRecurrenceOccurrence,
   deleteUntouchedFutureOccurrences, getSeriesHeadId, promoteNextSeriesHead,
+  addRecurrenceException, stopSeries,
   getAttachmentsForTask, getAttachmentById, addAttachment, deleteAttachment,
   getAttachmentsForSubtask, getSubtaskAttachmentById, addSubtaskAttachment, deleteSubtaskAttachment,
   getLinksForSubtask, addSubtaskLink, getSubtaskLinkById, deleteSubtaskLink,

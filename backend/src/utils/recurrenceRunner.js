@@ -35,7 +35,11 @@ async function generateForHead(head) {
   if (wanted.length === 0) return 0;
 
   const taken = new Set(await getSeriesOccurrenceDates(head.id));
-  const missing = wanted.filter((d) => !taken.has(d) && d >= today);
+  // Dates the user has explicitly deleted. Skipping them is what stops a
+  // removed occurrence from being resurrected on the next sweep — the bug
+  // that made a repeating activity feel impossible to get rid of.
+  const excluded = new Set(head.exDates || []);
+  const missing = wanted.filter((d) => !taken.has(d) && !excluded.has(d) && d >= today);
   if (missing.length === 0) return 0;
 
   const subtasks = await getSeriesTemplateSubtasks(head.id);
@@ -58,7 +62,8 @@ async function generateForTask(taskId) {
   return generateForHead({
     id: task.id, title: task.title, description: task.description, priority: task.priority,
     assigneeId: task.assigneeId, createdBy: task.createdBy, workspaceId: task.workspaceId,
-    projectId: task.projectId, due: task.due, dueTime: task.dueTime, recurrence: task.recurrence,
+    projectId: task.projectId, due: task.due, dueTime: task.dueTime, endTime: task.endTime,
+    recurrence: task.recurrence, exDates: task.exDates || [],
   });
 }
 

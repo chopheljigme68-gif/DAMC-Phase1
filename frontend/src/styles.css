@@ -150,6 +150,28 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 .tfh-task-card { transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease; }
 .tfh-task-card:hover { transform: translateY(-2px); border-color: var(--text-faint); box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.5); }
 
+/* Global search in the top bar. Sized to sit between the date and the
+   action buttons without crowding either. */
+.tfh-search-wrap {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: 10px;
+  padding: 6px 10px; width: 100%; min-width: 0;
+  transition: border-color 0.15s ease;
+}
+.tfh-search-wrap:focus-within { border-color: var(--accent); }
+.tfh-search-input {
+  flex: 1; min-width: 0; background: transparent; border: none; outline: none;
+  color: var(--text); font-size: 12.5px;
+}
+.tfh-search-input::placeholder { color: var(--text-faint); }
+.tfh-search-input:focus { outline: none; }
+
+.tfh-search-result {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 7px 10px; border-radius: 8px; border: none;
+  color: var(--text); text-align: left; cursor: pointer;
+}
+
 /* Account menu — the avatar control in the top bar. A pill rather than a
    plain icon button so it reads as "this is you", and so the name has a
    container to sit in at wide widths. */

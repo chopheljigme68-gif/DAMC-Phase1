@@ -2,7 +2,7 @@ const express = require("express");
 const fs = require("fs");
 const {
   getTasks, getTaskById, createTask, updateTask, replaceSubtasks, deleteTask, getWorkspaceMembers, getSubtaskById, getProjectById,
-  deleteUntouchedFutureOccurrences, promoteNextSeriesHead,
+  deleteUntouchedFutureOccurrences, promoteNextSeriesHead, addRecurrenceException, stopSeries,
   getAttachmentsForTask, getAttachmentById, addAttachment, deleteAttachment,
   getCommentsForTask, addComment,
   getLinksForTask, addLink, getLinkById, deleteLink,
@@ -29,6 +29,19 @@ const isManager = (req) => req.membership.role === "admin" || req.membership.rol
 // Parses "9:00 AM", "2:30 pm", or "14:30" into a 24-hour "HH:MM" string, or
 // null if it doesn't look like a time. Used by bulk-add to pull a leading
 // time off a pasted line like "9:00 AM - Meeting with X".
+// "Ends before it starts" is nonsense data, so it's rejected here rather
+// than left to render as a negative range in the UI. An end time with no
+// start is equally meaningless — there's nothing for it to end.
+const TIME_RE = /^\d{2}:\d{2}$/;
+function validateTimeRange(startTime, endTime) {
+  if (endTime === undefined || endTime === null || endTime === "") return null;
+  if (!TIME_RE.test(endTime)) return "End time must be in HH:MM format";
+  if (!startTime) return "Add a start time before setting an end time";
+  if (!TIME_RE.test(startTime)) return "Start time must be in HH:MM format";
+  if (endTime <= startTime) return "The end time has to be after the start time";
+  return null;
+}
+
 function parseClockTime(raw) {
   const m = raw.trim().match(/^(\d{1,2})[:.](\d{2})\s*(AM|PM|am|pm)?$/);
   if (!m) return null;
@@ -81,7 +94,7 @@ router.get("/", async (req, res, next) => {
 // be opened up.
 router.post("/", async (req, res, next) => {
   try {
-    const { title, description, status, priority, assigneeId, due, dueTime, subtasks, links, recurrence } = req.body || {};
+    const { title, description, status, priority, assigneeId, due, dueTime, endTime, subtasks, links, recurrence } = req.body || {};
     if (!title || !title.trim()) return res.status(400).json({ error: "Title is required" });
     if (!assigneeId) return res.status(400).json({ error: "Assignee is required" });
     if (!(await assertAssigneeIsMember(req.params.workspaceId, assigneeId))) {
@@ -90,12 +103,14 @@ router.post("/", async (req, res, next) => {
     // A repeat rule needs a date to repeat FROM — without one there's no
     // anchor to expand against, so reject it here rather than silently
     // storing a rule that can never produce an occurrence.
+    const timeError = validateTimeRange(dueTime, endTime);
+    if (timeError) return res.status(400).json({ error: timeError });
     const { recurrence: rule, error: ruleError } = normalizeRecurrence(recurrence);
     if (ruleError) return res.status(400).json({ error: ruleError });
     if (rule && !due) return res.status(400).json({ error: "Pick a due date — a repeating activity repeats from its first date" });
 
     const task = await createTask({
-      title: title.trim(), description, status, priority, assigneeId, due, dueTime, subtasks, links,
+      title: title.trim(), description, status, priority, assigneeId, due, dueTime, endTime, subtasks, links,
       recurrence: rule,
       createdBy: req.user.id, workspaceId: req.params.workspaceId, projectId: req.params.projectId,
     });
@@ -195,9 +210,18 @@ router.patch("/:id", async (req, res, next) => {
     }
 
     const patch = {};
-    ["title", "description", "status", "priority", "assigneeId", "due", "dueTime"].forEach((k) => {
+    ["title", "description", "status", "priority", "assigneeId", "due", "dueTime", "endTime"].forEach((k) => {
       if (req.body[k] !== undefined) patch[k] = req.body[k];
     });
+    // Validate the range as it will BE after this patch, not just what the
+    // request happens to carry — changing only the start time can invalidate
+    // an end time that's already stored.
+    {
+      const nextStart = patch.dueTime !== undefined ? patch.dueTime : existing.dueTime;
+      const nextEnd = patch.endTime !== undefined ? patch.endTime : existing.endTime;
+      const timeError = validateTimeRange(nextStart, nextEnd);
+      if (timeError) return res.status(400).json({ error: timeError });
+    }
     if (patch.assigneeId && !(await assertAssigneeIsMember(req.params.workspaceId, patch.assigneeId))) {
       return res.status(400).json({ error: "Assignee must be a member of this workspace" });
     }
@@ -216,17 +240,33 @@ router.patch("/:id", async (req, res, next) => {
     // Repeat rule. Only editable on the series HEAD — changing it from one
     // occurrence in the middle would make "which task owns the rule"
     // ambiguous, so the client edits the series from its first task.
+    // A rule change coming from an occurrence in the MIDDLE of a series used
+    // to be rejected with "open the first activity" — which is unhelpful
+    // when you don't know which one that is, and was the practical reason a
+    // repeating activity couldn't be switched off. It now applies to the
+    // series head on the caller's behalf.
     let ruleChanged = false;
+    let seriesHeadId = null;
     if (req.body.recurrence !== undefined) {
-      if (existing.recurrenceParentId) {
-        return res.status(400).json({ error: "Open the first activity in this series to change how it repeats" });
-      }
       const { recurrence: rule, error: ruleError } = normalizeRecurrence(req.body.recurrence);
       if (ruleError) return res.status(400).json({ error: ruleError });
-      const nextDue = patch.due !== undefined ? patch.due : existing.due;
-      if (rule && !nextDue) return res.status(400).json({ error: "Pick a due date — a repeating activity repeats from its first date" });
-      ruleChanged = JSON.stringify(rule) !== JSON.stringify(existing.recurrence || null);
-      patch.recurrence = rule;
+
+      if (existing.recurrenceParentId) {
+        // Only switching the series OFF is meaningful from an occurrence —
+        // redefining the schedule needs the series' own start date as its
+        // anchor, which this task isn't.
+        if (rule) {
+          return res.status(400).json({ error: "Open the first activity in this series to change its schedule. From here you can only stop it repeating." });
+        }
+        seriesHeadId = existing.recurrenceParentId;
+        await stopSeries(seriesHeadId);
+        ruleChanged = true;
+      } else {
+        const nextDue = patch.due !== undefined ? patch.due : existing.due;
+        if (rule && !nextDue) return res.status(400).json({ error: "Pick a due date — a repeating activity repeats from its first date" });
+        ruleChanged = JSON.stringify(rule) !== JSON.stringify(existing.recurrence || null);
+        patch.recurrence = rule;
+      }
     }
 
     const { task, prevStatus, prevAssignee } = await updateTask(req.params.id, patch);
@@ -235,7 +275,11 @@ router.patch("/:id", async (req, res, next) => {
     // the old one — clear the untouched ones, then regenerate. Occurrences
     // someone has already worked on are left alone (see
     // deleteUntouchedFutureOccurrences).
-    if (ruleChanged || (patch.due !== undefined && task.recurrence)) {
+    if (seriesHeadId) {
+      // Stopped from an occurrence: clear the series' untouched future
+      // occurrences, this task included if it's still ahead of today.
+      await deleteUntouchedFutureOccurrences(seriesHeadId, localDateStr());
+    } else if (ruleChanged || (patch.due !== undefined && task.recurrence)) {
       await deleteUntouchedFutureOccurrences(task.id, localDateStr());
       if (task.recurrence) await generateForTask(task.id);
     }
@@ -288,9 +332,20 @@ router.delete("/:id", async (req, res, next) => {
     if (!isManager(req)) return res.status(403).json({ error: "Only the workspace admin or team lead can delete tasks" });
     const existing = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!existing) return res.status(404).json({ error: "Task not found" });
+    // Deleting one occurrence has to STICK. The generator fills in missing
+    // dates for a series, so without recording this date as an exception
+    // the next sweep would put the task straight back — which is exactly
+    // what made a repeating activity look impossible to remove.
+    if (existing.recurrenceParentId && existing.due) {
+      await addRecurrenceException(existing.recurrenceParentId, existing.due);
+    }
     // Deleting the first activity of a repeating series must not cascade
-    // the whole series away — hand the rule to the next occurrence first.
-    if (existing.recurrence && !existing.recurrenceParentId) await promoteNextSeriesHead(req.params.id);
+    // the whole series away — hand the rule (and the exception list) to the
+    // next occurrence first, then exclude this date on the new head.
+    if (existing.recurrence && !existing.recurrenceParentId) {
+      const newHeadId = await promoteNextSeriesHead(req.params.id);
+      if (newHeadId && existing.due) await addRecurrenceException(newHeadId, existing.due);
+    }
     await deleteTask(req.params.id);
     broadcastTaskChange(req.params.workspaceId, { reason: "deleted", taskId: req.params.id, projectId: req.params.projectId });
     res.status(204).end();

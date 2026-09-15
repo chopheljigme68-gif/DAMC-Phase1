@@ -51,6 +51,7 @@ export const api = {
 
   getWorkspaces: () => request("/workspaces"),
   createWorkspace: (name) => request("/workspaces", { method: "POST", body: { name } }),
+  renameWorkspace: (workspaceId, name) => request(`/workspaces/${workspaceId}`, { method: "PATCH", body: { name } }),
   getMembers: (workspaceId) => request(`/workspaces/${workspaceId}/members`),
   inviteToWorkspace: (workspaceId, email) => request(`/workspaces/${workspaceId}/invite`, { method: "POST", body: { email } }),
   setMemberRole: (workspaceId, userId, role) => request(`/workspaces/${workspaceId}/members/${userId}/role`, { method: "PATCH", body: { role } }),

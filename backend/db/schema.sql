@@ -626,3 +626,19 @@ CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_parent ON tasks(recurrence_paren
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_recurrence_occurrence
   ON tasks(recurrence_parent_id, due)
   WHERE recurrence_parent_id IS NOT NULL;
+
+/* ---------------- recurring activities: exception dates ---------------- */
+-- Dates the generator must NOT recreate. Without this, deleting a single
+-- occurrence was pointless: the next hourly sweep saw a "missing" date in
+-- the series and helpfully put it back, so the activity appeared to repeat
+-- forever and could not be removed. Deleting an occurrence now records its
+-- date here, on the series head, and generation skips it.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_exdates DATE[] NOT NULL DEFAULT '{}';
+
+/* ---------------- activities that run from one time to another ---------------- */
+-- `due_time` has always been the START time. Meetings and site visits have an
+-- end too, and people were writing "2–4 PM" into the title to express it.
+-- Nullable on purpose: plenty of activities are a single moment (or all-day)
+-- and forcing an end time on those would be noise. Subtasks already had
+-- start_time/end_time — this brings tasks in line with them.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_time TIME;

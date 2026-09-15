@@ -1,6 +1,6 @@
 const express = require("express");
 const {
-  getWorkspacesForUser, createWorkspace, getWorkspaceById, getWorkspaceMembers, getUserByEmail,
+  getWorkspacesForUser, createWorkspace, renameWorkspace, getWorkspaceById, getWorkspaceMembers, getUserByEmail,
   addWorkspaceMember, setMemberRole, updateMemberTitle, removeMember, countAdmins, createInvite, getMembership,
   getWorkspaceWorkload, getHolidays, addHoliday, deleteHoliday, getHolidayById, getAllTasksForWorkspace, getOrCreateGeneralProject,
 } = require("../db");
@@ -78,6 +78,22 @@ router.post("/:workspaceId/invite", authenticate, requireWorkspaceMember, requir
 // Admin-only: set someone's role. Exactly one 'lead' at a time (enforced by
 // a DB constraint too — this isn't just a nice UI rule). Refuses to demote
 // the workspace's last remaining admin so it never gets orphaned.
+// Rename the workspace. The name is the app's wordmark — it's what the
+// sidebar and every screen header show — so it has to be editable in the
+// product rather than only by whoever can reach the database. Admin only,
+// same bar as every other workspace-level setting. The slug is left
+// untouched on purpose (see renameWorkspace in db.js).
+router.patch("/:workspaceId", authenticate, requireWorkspaceMember, requireRole("admin"), async (req, res, next) => {
+  try {
+    const { name } = req.body || {};
+    if (!name || !name.trim()) return res.status(400).json({ error: "Workspace name is required" });
+    if (name.trim().length > 80) return res.status(400).json({ error: "Keep the workspace name under 80 characters" });
+    const workspace = await renameWorkspace(req.params.workspaceId, name.trim());
+    if (!workspace) return res.status(404).json({ error: "Workspace not found" });
+    res.json({ workspace });
+  } catch (err) { next(err); }
+});
+
 router.patch("/:workspaceId/members/:userId/role", authenticate, requireWorkspaceMember, requireRole("admin"), async (req, res, next) => {
   try {
     const { role } = req.body || {};

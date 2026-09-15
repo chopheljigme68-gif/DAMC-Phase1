@@ -88,6 +88,14 @@ const formatTimeLabel = (hhmm) => {
 // milestone files) — checked client-side too so an oversized file is
 // rejected instantly instead of after a slow upload attempt that was
 // always going to fail.
+// "9:00 AM – 11:00 AM" when an activity runs to an end time, just the start
+// when it doesn't. One helper so every surface renders a range identically
+// instead of each one re-deciding.
+const formatTimeRange = (start, end) => {
+  if (!start) return "";
+  return end ? `${formatTimeLabel(start)} – ${formatTimeLabel(end)}` : formatTimeLabel(start);
+};
+
 const MAX_FILE_MB = 20;
 const validateFiles = (fileList) => {
   const files = Array.from(fileList || []);
@@ -130,6 +138,104 @@ const shiftDateStr = (dateStr, days) => {
   const d = new Date(`${dateStr}T12:00:00`);
   d.setDate(d.getDate() + days);
   return localDateStr(d);
+};
+
+/* ------------------------------------------------------------------ */
+/* Dates — always dd/mm/yyyy                                            */
+/* ------------------------------------------------------------------ */
+// A native <input type="date"> renders in the BROWSER's locale, so the same
+// app shows 09/15/2026 to one person and 15/09/2026 to another, with no way
+// to control it from the markup. For a Bhutanese government office that
+// reads day-first, the US order is a real source of misreading.
+//
+// So the visible field is a plain text input we format ourselves, always
+// dd/mm/yyyy. The native picker is still there behind a calendar button, so
+// nobody loses the calendar or the mobile date wheel — it's just not what
+// renders the value.
+const isoToDisplay = (iso) => {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+};
+
+// Accepts "5/9/26", "05/09/2026", "5-9-2026" and so on. Two-digit years map
+// into 2000-2099: this app's dates are deadlines and logs, never birthdays,
+// so a 19xx reading would always be wrong.
+const displayToIso = (text) => {
+  const m = (text || "").trim().match(/^(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{2}|\d{4})$/);
+  if (!m) return null;
+  const day = parseInt(m[1], 10);
+  const month = parseInt(m[2], 10);
+  let year = parseInt(m[3], 10);
+  if (m[3].length === 2) year += 2000;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  // Reject 31/02 and friends: the Date round-trip catches any day that
+  // doesn't exist in that month.
+  const probe = new Date(`${iso}T12:00:00`);
+  if (probe.getUTCDate && probe.getDate() !== day) return null;
+  return iso;
+};
+
+const DateField = ({ value, onChange, disabled, id, min, max, ariaLabel, style }) => {
+  const [text, setText] = useState(() => isoToDisplay(value));
+  const [invalid, setInvalid] = useState(false);
+  const pickerRef = useRef(null);
+
+  // Follow the value when it changes from outside (a form reset, a different
+  // task opened into the same dialog) without fighting what's being typed.
+  useEffect(() => { setText(isoToDisplay(value)); setInvalid(false); }, [value]);
+
+  const commit = (raw) => {
+    const trimmed = (raw || "").trim();
+    if (!trimmed) { setInvalid(false); onChange(""); return; }
+    const iso = displayToIso(trimmed);
+    if (iso) { setInvalid(false); onChange(iso); setText(isoToDisplay(iso)); }
+    else setInvalid(true);
+  };
+
+  const openPicker = () => {
+    const el = pickerRef.current;
+    if (!el) return;
+    // showPicker() is the supported way in current Chrome/Edge/Firefox;
+    // .click() is the fallback for browsers that don't have it yet.
+    if (typeof el.showPicker === "function") { try { el.showPicker(); return; } catch { /* fall through */ } }
+    el.click();
+  };
+
+  return (
+    <div style={{ position: "relative", ...style }}>
+      <input
+        id={id}
+        className="tfh-input"
+        inputMode="numeric"
+        placeholder="dd/mm/yyyy"
+        aria-label={ariaLabel || "Date (day/month/year)"}
+        disabled={disabled}
+        value={text}
+        onChange={(e) => { setText(e.target.value); setInvalid(false); }}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(e.currentTarget.value); } }}
+        style={{ paddingRight: 34, opacity: disabled ? 0.7 : 1, borderColor: invalid ? "var(--pri-high)" : undefined }}
+      />
+      <button
+        type="button" disabled={disabled} onClick={openPicker}
+        aria-label="Open calendar"
+        style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", padding: 5, display: "flex", cursor: disabled ? "default" : "pointer" }}
+      >
+        <CalendarDays size={14} color="var(--text-faint)" />
+      </button>
+      {/* The real date input: it drives the calendar/wheel but never renders
+          a value, so the browser's locale format is never on screen. */}
+      <input
+        ref={pickerRef} type="date" tabIndex={-1} aria-hidden="true" disabled={disabled}
+        value={value || ""} min={min} max={max}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ position: "absolute", right: 8, bottom: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+      />
+      {invalid && <div style={{ fontSize: 11, color: "var(--pri-high)", marginTop: 4 }}>Use dd/mm/yyyy</div>}
+    </div>
+  );
 };
 
 const dueMeta = (dateStr, status) => {
@@ -272,7 +378,7 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
         )}
         {task.dueTime && (
           <span className="tfh-chip tfh-mono" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}>
-            <Clock size={10} /> {formatTimeLabel(task.dueTime)}
+            <Clock size={10} /> {formatTimeRange(task.dueTime, task.endTime)}
           </span>
         )}
         <PriorityChip level={task.priority} />
@@ -338,7 +444,7 @@ const Column = ({ stage, tasks, users, onOpen, onAdd, onComplete, onReopen, canM
 const emptyDraft = (status, users, currentUserId, projectId) => ({
   id: null, title: "", description: "", status: status || "todo", priority: "medium",
   assigneeId: currentUserId || users[0]?.id || "", due: localDateStr(new Date(Date.now() + 3 * 86400000)),
-  dueTime: "", subtasks: [], pendingLinks: [], pendingFiles: [], projectId: projectId || "",
+  dueTime: "", endTime: "", subtasks: [], pendingLinks: [], pendingFiles: [], projectId: projectId || "",
   recurrence: null,
 });
 
@@ -1138,7 +1244,7 @@ const describeRecurrence = (rule) => {
   return rule.until ? `${base}, until ${shortDate(rule.until)}` : base;
 };
 
-const RecurrenceField = ({ value, due, disabled, isOccurrence, onChange }) => {
+const RecurrenceField = ({ value, due, disabled, isOccurrence, stopRequested, onChange, onStopSeries }) => {
   const preset = presetOf(value);
   const dueWeekday = due ? new Date(`${due}T12:00:00`).getDay() : new Date().getDay();
 
@@ -1148,9 +1254,32 @@ const RecurrenceField = ({ value, due, disabled, isOccurrence, onChange }) => {
   // be rejected on save.
   if (isOccurrence) {
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-dim)", background: "var(--raised)", padding: "9px 12px", borderRadius: 10, marginBottom: 14 }}>
-        <Repeat size={13} color="var(--accent)" />
-        Part of a repeating activity — open the first one in the series to change how it repeats.
+      <div style={{ background: "var(--raised)", padding: "11px 12px", borderRadius: 10, marginBottom: 14, display: "flex", flexDirection: "column", gap: 9 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-dim)" }}>
+          <Repeat size={13} color="var(--accent)" style={{ flexShrink: 0 }} />
+          <span>Part of a repeating activity. Deleting this one removes just this date — it won't come back.</span>
+        </div>
+        {/* You can stop the whole series from any occurrence now. Requiring
+            people to find "the first one" was the practical reason a daily
+            activity couldn't be switched off. */}
+        {!disabled && (
+          stopRequested ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: "var(--pri-high)", fontWeight: 600 }}>
+              <Check size={13} /> Will stop repeating when you save
+              <button type="button" onClick={() => onStopSeries(false)} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "2px 8px" }}>Undo</button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onStopSeries(true)}
+              className="tfh-btn tfh-btn-danger"
+              style={{ fontSize: 11.5, padding: "4px 10px", alignSelf: "flex-start" }}
+              title="Stops all future occurrences of this activity"
+            >
+              <X size={12} /> Stop repeating
+            </button>
+          )
+        )}
       </div>
     );
   }
@@ -1223,11 +1352,11 @@ const RecurrenceField = ({ value, due, disabled, isOccurrence, onChange }) => {
             )}
             <div>
               <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>Ends on (optional)</div>
-              <input
-                type="date" className="tfh-input" disabled={disabled} min={due || undefined}
+              <DateField
+                disabled={disabled} min={due || undefined}
                 value={value.until || ""}
-                onChange={(e) => onChange({ ...value, until: e.target.value || null })}
-                style={{ fontSize: 12 }}
+                onChange={(v) => onChange({ ...value, until: v || null })}
+                ariaLabel="Repeat end date"
               />
             </div>
           </div>
@@ -1326,11 +1455,35 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
           </div>
           <div>
             <label className="tfh-label">Due date</label>
-            <input type="date" disabled={!canEditFields} className="tfh-input" value={draft.due} onChange={(e) => setDraft({ ...draft, due: e.target.value })} style={{ opacity: canEditFields ? 1 : 0.7 }} />
+            <DateField disabled={!canEditFields} value={draft.due} onChange={(v) => setDraft({ ...draft, due: v })} ariaLabel="Due date" />
           </div>
           <div>
-            <label className="tfh-label">Time <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional — for meetings/appointments)</span></label>
-            <input type="time" disabled={!canEditFields} className="tfh-input" value={draft.dueTime || ""} onChange={(e) => setDraft({ ...draft, dueTime: e.target.value })} style={{ opacity: canEditFields ? 1 : 0.7 }} />
+            <label className="tfh-label">Time from <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional)</span></label>
+            <input
+              type="time" disabled={!canEditFields} className="tfh-input"
+              value={draft.dueTime || ""}
+              onChange={(e) => {
+                const dueTime = e.target.value;
+                // Clearing the start clears the end too — an end time with
+                // nothing to end is meaningless, and the server rejects it.
+                setDraft({ ...draft, dueTime, endTime: dueTime ? draft.endTime : "" });
+              }}
+              style={{ opacity: canEditFields ? 1 : 0.7 }} aria-label="Start time"
+            />
+          </div>
+          <div>
+            <label className="tfh-label">Time to <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional)</span></label>
+            <input
+              type="time" disabled={!canEditFields || !draft.dueTime} className="tfh-input"
+              value={draft.endTime || ""}
+              min={draft.dueTime || undefined}
+              onChange={(e) => setDraft({ ...draft, endTime: e.target.value })}
+              style={{ opacity: canEditFields && draft.dueTime ? 1 : 0.7 }} aria-label="End time"
+              title={draft.dueTime ? "When this finishes" : "Set a start time first"}
+            />
+            {draft.endTime && draft.dueTime && draft.endTime <= draft.dueTime && (
+              <div style={{ fontSize: 11, color: "var(--pri-high)", marginTop: 4 }}>Has to be after the start time.</div>
+            )}
           </div>
         </div>
 
@@ -1339,7 +1492,9 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
           due={draft.due}
           disabled={!canEditFields}
           isOccurrence={!!draft.recurrenceParentId}
+          stopRequested={!!draft.stopSeries}
           onChange={(recurrence) => setDraft({ ...draft, recurrence })}
+          onStopSeries={(stop) => setDraft({ ...draft, stopSeries: stop })}
         />
 
         <div style={{ marginBottom: 14 }}>
@@ -1355,13 +1510,10 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
           {draft.id && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>You can move this task to a different project if it was filed by mistake.</div>}
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-          <div>
-            <label className="tfh-label">Stage</label>
-            <select disabled={!canEditFields} className="tfh-input" value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })} style={{ opacity: canEditFields ? 1 : 0.7 }}>
-              {STAGES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-            </select>
-          </div>
+        {/* Stage used to be a dropdown here. It's a two-state field — done
+            or not — so it's now a tick beside the footer buttons, where the
+            decision actually gets made when you're finishing a task. */}
+        <div style={{ marginBottom: 14 }}>
           <div>
             <label className="tfh-label">Priority</label>
             <button
@@ -1400,7 +1552,31 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid var(--line)", paddingTop: 16, marginTop: saveError ? 0 : undefined }}>
           {draft.id && canManage ? <DeleteButton onConfirm={() => onDelete(draft.id)} /> : <span />}
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {/* Mark complete — the old Stage dropdown, as a tick. Sits with
+                the footer actions because that's the moment you reach for
+                it: you finish the task, then save. */}
+            {canEditFields && (
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, status: draft.status === "done" ? "todo" : "done" })}
+                className="tfh-btn"
+                aria-pressed={draft.status === "done"}
+                title={draft.status === "done" ? "Completed — click to reopen" : "Mark this task complete"}
+                style={{
+                  gap: 7,
+                  borderColor: draft.status === "done" ? "var(--accent)" : "var(--line)",
+                  background: draft.status === "done" ? "var(--accent-soft)" : "transparent",
+                  color: draft.status === "done" ? "var(--accent)" : "var(--text-dim)",
+                  fontWeight: draft.status === "done" ? 600 : 500,
+                }}
+              >
+                <span className={`tfh-checkbox ${draft.status === "done" ? "checked" : ""}`} style={{ pointerEvents: "none" }}>
+                  {draft.status === "done" && <Check size={11} color="#12141c" strokeWidth={3} />}
+                </span>
+                {draft.status === "done" ? "Completed" : "Mark complete"}
+              </button>
+            )}
             {canEditFields ? (
               <>
                 <button className="tfh-btn" onClick={onClose} disabled={saving}>Cancel</button>
@@ -1531,7 +1707,7 @@ const BulkAddModal = ({ users, projects, currentProjectId, currentUserId, onClos
             </div>
             <div>
               <label className="tfh-label">Due date</label>
-              <input type="date" className="tfh-input" value={due} onChange={(e) => setDue(e.target.value)} />
+              <DateField value={due} onChange={setDue} ariaLabel="Due date for these tasks" />
             </div>
             <div>
               <label className="tfh-label">Priority</label>
@@ -1596,6 +1772,206 @@ const BulkAddModal = ({ users, projects, currentProjectId, currentUserId, onClos
 /* ------------------------------------------------------------------ */
 /* Notification bell                                                    */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Global search                                                        */
+/* ------------------------------------------------------------------ */
+// "Type a name of activity and it shows all similar activities."
+//
+// Tasks are already in memory for the whole workspace, so matching them is
+// instant and needs no request. Logged activities live in the activity-log
+// JSON, so those are fetched once — lazily, on the first search — for the
+// last 90 days, then filtered client-side. That keeps typing responsive
+// instead of firing a request per keystroke.
+const SEARCH_LIMIT = 40;
+const SEARCH_LOOKBACK_DAYS = 90;
+
+// Ranks a match so the closest names come first: an exact title beats a
+// title that starts with the query, which beats one that merely contains
+// it, which beats a hit in the description. Plain substring matching, not
+// fuzzy — people here search by the words actually in the activity.
+const scoreMatch = (title, description, q) => {
+  const t = (title || "").toLowerCase();
+  const d = (description || "").toLowerCase();
+  if (t === q) return 0;
+  if (t.startsWith(q)) return 1;
+  const words = t.split(/\s+/);
+  if (words.some((w) => w.startsWith(q))) return 2;
+  if (t.includes(q)) return 3;
+  if (d.includes(q)) return 4;
+  return -1;
+};
+
+const GlobalSearch = ({ workspaceId, tasks, users, currentUserId, onOpenTask, onOpenActivityDay }) => {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [logs, setLogs] = useState(null); // null = not fetched yet
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const ref = useRef(null);
+  const inputRef = useRef(null);
+
+  // Fetch the activity-log side once, the first time someone actually
+  // searches — not on mount, since most sessions never use search.
+  useEffect(() => {
+    if (!query.trim() || logs !== null || loadingLogs) return;
+    setLoadingLogs(true);
+    const to = localDateStr();
+    const from = shiftDateStr(to, -SEARCH_LOOKBACK_DAYS);
+    api.getTeamActivityLogs(workspaceId, from, to)
+      .then((r) => setLogs(r.logs))
+      .catch(() => setLogs([]))
+      .finally(() => setLoadingLogs(false));
+  }, [query, logs, loadingLogs, workspaceId]);
+
+  useEffect(() => {
+    const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  // Ctrl/Cmd+K focuses search from anywhere — the shortcut people already
+  // expect, and the reason the box can stay compact in the bar.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+        setOpen(true);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) return [];
+
+    const taskHits = tasks
+      .map((t) => ({ t, score: scoreMatch(t.title, t.description, q) }))
+      .filter((r) => r.score >= 0)
+      .map((r) => ({
+        kind: "task",
+        score: r.score,
+        // Undated tasks sort last within a score band rather than crashing
+        // the comparator.
+        date: r.t.due || "",
+        task: r.t,
+        title: r.t.title,
+        assignee: users.find((u) => u.id === r.t.assigneeId),
+      }));
+
+    const activityHits = (logs || []).flatMap((log) =>
+      (log.content || [])
+        .filter((b) => b.type === "text" && b.text?.trim())
+        .map((block, blockIndex) => ({ block, blockIndex }))
+        .map(({ block, blockIndex }) => ({ block, blockIndex, score: scoreMatch(block.text, block.notes, q) }))
+        .filter((r) => r.score >= 0)
+        .map((r) => ({
+          kind: "activity",
+          score: r.score,
+          date: log.entryDate,
+          title: r.block.text,
+          block: r.block,
+          entryDate: log.entryDate,
+          logId: log.id,
+          author: users.find((u) => u.id === log.userId) || { name: log.userName, color: log.userColor, initials: log.userInitials },
+        }))
+    );
+
+    return [...taskHits, ...activityHits]
+      .sort((a, b) => a.score - b.score || b.date.localeCompare(a.date))
+      .slice(0, SEARCH_LIMIT);
+  }, [query, tasks, users, logs]);
+
+  useEffect(() => { setHighlight(0); }, [query]);
+
+  const choose = (r) => {
+    setOpen(false);
+    setQuery("");
+    if (r.kind === "task") onOpenTask(r.task);
+    else onOpenActivityDay(r);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Escape") { setOpen(false); inputRef.current?.blur(); return; }
+    if (!results.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => (h + 1) % results.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => (h - 1 + results.length) % results.length); }
+    else if (e.key === "Enter") { e.preventDefault(); choose(results[highlight]); }
+  };
+
+  const q = query.trim();
+  const showPanel = open && q.length > 0;
+
+  return (
+    <div style={{ position: "relative", flex: "1 1 260px", maxWidth: 340, minWidth: 0 }} ref={ref}>
+      <div className="tfh-search-wrap">
+        <Search size={14} color="var(--text-faint)" style={{ flexShrink: 0 }} />
+        <input
+          ref={inputRef}
+          className="tfh-search-input"
+          placeholder="Search activities…"
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+          aria-label="Search activities"
+        />
+        {query ? (
+          <button className="tfh-btn tfh-btn-ghost" style={{ padding: 3 }} onClick={() => { setQuery(""); inputRef.current?.focus(); }} aria-label="Clear search">
+            <X size={12} />
+          </button>
+        ) : (
+          <span className="tfh-mono tfh-hide-mobile" style={{ fontSize: 10, color: "var(--text-faint)", flexShrink: 0 }}>⌘K</span>
+        )}
+      </div>
+
+      {showPanel && (
+        <div className="tfh-card tfh-fade-in" style={{ position: "absolute", right: 0, left: 0, top: 42, zIndex: 40, padding: 6, maxHeight: 420, overflowY: "auto", minWidth: 300 }}>
+          {q.length < 2 ? (
+            <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "10px 10px" }}>Keep typing…</div>
+          ) : results.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "10px 10px" }}>
+              {loadingLogs ? "Searching…" : `Nothing matches "${q}".`}
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 10.5, color: "var(--text-faint)", padding: "4px 10px 6px", textTransform: "uppercase", letterSpacing: 0.05, fontWeight: 700 }}>
+                {results.length} match{results.length === 1 ? "" : "es"}{loadingLogs ? " · still loading logged activity" : ""}
+              </div>
+              {results.map((r, i) => (
+                <button
+                  key={`${r.kind}-${r.task?.id || r.logId}-${i}`}
+                  onClick={() => choose(r)}
+                  onMouseEnter={() => setHighlight(i)}
+                  className="tfh-search-result"
+                  style={{ background: i === highlight ? "var(--raised)" : "transparent" }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+                    {r.kind === "task"
+                      ? <span style={{ width: 7, height: 7, borderRadius: 999, background: r.task.status === "done" ? "var(--stage-done)" : "var(--stage-progress)", flexShrink: 0 }} />
+                      : <BookOpen size={12} color="var(--accent)" style={{ flexShrink: 0 }} />}
+                    <span style={{ fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</span>
+                  </span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0 }}>
+                    {r.kind === "task" && r.task.projectName && (
+                      <span className="tfh-chip tfh-hide-mobile" style={{ fontSize: 9.5, background: "var(--raised)", color: "var(--text-faint)", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.task.projectName}</span>
+                    )}
+                    {r.date && <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--date-scheduled)" }}>{shortDate(r.date)}</span>}
+                    {r.kind === "task" && r.assignee && <Avatar member={r.assignee} size={18} />}
+                    {r.kind === "activity" && r.author && <Avatar member={r.author} size={18} />}
+                  </span>
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // The account control, in the top bar next to Quick add / notifications /
 // theme — where every other app puts it, and where there's room for the
 // full name. It used to be a block pinned to the bottom of the sidebar,
@@ -1749,7 +2125,7 @@ const TaskListMini = ({ title, items, users, onOpen, emptyText, showAssignee }) 
         return (
           <button key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 8px", borderRadius: 10, background: "transparent", border: "none", color: "var(--text)", textAlign: "left" }}>
             <span style={{ width: 7, height: 7, borderRadius: 999, background: STAGES.find((s) => s.id === t.status).color, flexShrink: 0 }} />
-            {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(t.dueTime)}</span>}
+            {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--accent)", flexShrink: 0 }}>{formatTimeRange(t.dueTime, t.endTime)}</span>}
             <span style={{ fontSize: 13.5, flex: 1, color: t.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{t.title}</span>
             <PriorityChip level={t.priority} />
             <span style={{ fontSize: 12, color: meta.tone, minWidth: 92, textAlign: "right" }}>{meta.label}</span>
@@ -1790,7 +2166,7 @@ const activityItemsFrom = (logEntry, author) =>
 
 const mergeAgenda = (tasksToday, logEntry, author) => {
   const items = [
-    ...tasksToday.map((t) => ({ time: t.dueTime || null, label: t.title, kind: "task", task: t })),
+    ...tasksToday.map((t) => ({ time: t.dueTime || null, endTime: t.endTime || null, label: t.title, kind: "task", task: t })),
     ...activityItemsFrom(logEntry, author),
   ];
   const timed = items.filter((i) => i.time).sort((a, b) => a.time.localeCompare(b.time));
@@ -1852,14 +2228,11 @@ const AgendaRow = ({ item, onOpen, onOpenActivity }) => {
           minWidth: item.dateLabel ? 54 : 58, flexShrink: 0, marginTop: 1,
         }}
       >
-        {item.time ? formatTimeLabel(item.time) : item.dateLabel || "Anytime"}
+        {item.time ? formatTimeRange(item.time, item.endTime) : item.dateLabel || "Anytime"}
       </span>
       <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 12.5, color: item.kind === "task" && item.task.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{item.label}</span>
         {item.kind === "task" && <PriorityChip level={item.task.priority} />}
-        {item.kind === "activity" && (
-          <span className="tfh-chip" style={{ fontSize: 9.5, background: "var(--accent-soft)", color: "var(--accent)" }}>Logged</span>
-        )}
         {/* An activity carrying extra detail advertises it, so it's obvious
             there's something behind the click rather than a dead row. */}
         {item.kind === "activity" && (item.block?.notes || (item.block?.links || []).length > 0) && (
@@ -1871,16 +2244,18 @@ const AgendaRow = ({ item, onOpen, onOpenActivity }) => {
             clock time, surface that time on the right too — the Chief asked to
             see the time against each upcoming collab. */}
         {item.kind === "task" && item.dateLabel && item.task.dueTime && (
-          <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--accent)", marginLeft: "auto" }}>{formatTimeLabel(item.task.dueTime)}</span>
+          <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--accent)", marginLeft: "auto" }}>{formatTimeRange(item.task.dueTime, item.task.endTime)}</span>
         )}
       </div>
     </div>
     {/* A task's latest comment shows indented right under it — so a
         supervisor's note on a member's task/activity appears alongside it in
         Team Collabs, not hidden inside the task dialog. */}
+    {/* Supervisor notes read in the priority red — they're feedback that
+        needs acting on, not more grey body text to scroll past. */}
     {item.kind === "task" && item.task.lastCommentBody && (
-      <div onClick={() => onOpen(item.task)} style={{ marginLeft: item.dateLabel ? 62 : 66, marginBottom: 4, paddingLeft: 10, borderLeft: "2px solid var(--line)", cursor: "pointer" }}>
-        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+      <div onClick={() => onOpen(item.task)} style={{ marginLeft: item.dateLabel ? 62 : 66, marginBottom: 4, paddingLeft: 10, borderLeft: "2px solid var(--pri-high)", cursor: "pointer" }}>
+        <span style={{ fontSize: 11, color: "var(--pri-high)", fontWeight: 500 }}>
           <MessageSquare size={9} style={{ display: "inline", marginRight: 4, verticalAlign: "middle" }} />
           {item.task.lastCommentAuthor ? `${item.task.lastCommentAuthor}: ` : ""}{item.task.lastCommentBody}
           {item.task.commentCount > 1 ? `  (+${item.task.commentCount - 1} more)` : ""}
@@ -2095,7 +2470,7 @@ const AllTeamsCollabsPanel = ({ workspaceId, day, setDay, tasks, users, currentU
     const items = [
       ...tasks
         .filter((t) => t.due === day)
-        .map((t) => ({ time: t.dueTime || null, label: t.title, kind: "task", task: t, person: byUser.get(t.assigneeId) })),
+        .map((t) => ({ time: t.dueTime || null, endTime: t.endTime || null, label: t.title, kind: "task", task: t, person: byUser.get(t.assigneeId) })),
       ...dayLogs.flatMap((log) =>
         activityItemsFrom(log, byUser.get(log.userId) || { name: log.userName, color: log.userColor, initials: log.userInitials })
           .map((item) => ({ ...item, person: item.author }))
@@ -2123,9 +2498,9 @@ const AllTeamsCollabsPanel = ({ workspaceId, day, setDay, tasks, users, currentU
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <button className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={() => shiftDay(-1)} aria-label="Previous day"><ChevronLeft size={14} /></button>
-          <input
-            type="date" className="tfh-input" value={day} onChange={(e) => e.target.value && setDay(e.target.value)}
-            style={{ fontSize: 12, width: 150 }} aria-label="Pick a day"
+          <DateField
+            value={day} onChange={(v) => v && setDay(v)}
+            style={{ width: 160 }} ariaLabel="Pick a day"
           />
           <button className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={() => shiftDay(1)} aria-label="Next day"><ChevronRight size={14} /></button>
           {!isToday && (
@@ -2203,12 +2578,12 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   const todayStr = localDateStr();
 
   const myTasksToday = tasks.filter((t) => t.assigneeId === currentUser?.id && t.due === todayStr);
-  // Capped: this is the "what's coming" preview card, not an exhaustive
-  // list — the Board and Calendar are where you go for everything.
+  // NOT capped. It used to take the first 6, which silently hid anything
+  // further out — an activity added for the 24th simply never appeared, and
+  // looked like it hadn't saved. The card scrolls instead.
   const myUpcoming = [...tasks]
     .filter((t) => t.assigneeId === currentUser?.id && t.status !== "done" && t.due && t.due > todayStr)
-    .sort((a, b) => new Date(a.due) - new Date(b.due))
-    .slice(0, 6);
+    .sort((a, b) => new Date(a.due) - new Date(b.due));
   // "Pending works" — my tasks that are past due but still not done. These
   // are the things that have slipped and need catching up on, distinct from
   // "upcoming" (future) and "today".
@@ -2292,11 +2667,16 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
       </div>
 
       <div className="tfh-card" style={{ padding: 18 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>Upcoming Collabs</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>Upcoming Collabs</span>
+          {myUpcoming.length > 0 && (
+            <span className="tfh-chip" style={{ fontSize: 10, background: "var(--raised)", color: "var(--text-dim)" }}>{myUpcoming.length}</span>
+          )}
+        </div>
         {myUpcoming.length === 0 ? (
           <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing upcoming.</div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", flexDirection: "column", maxHeight: 320, overflowY: "auto" }}>
             {myUpcoming.map((t) => (
               <div
                 key={t.id} onClick={() => onOpen(t)} className="tfh-agenda-row"
@@ -2306,7 +2686,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
               >
                 <span className="tfh-mono" style={{ fontSize: 11.5, fontWeight: 600, color: "var(--date-scheduled)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
                 <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
-                {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(t.dueTime)}</span>}
+                {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11, color: "var(--accent)", flexShrink: 0 }}>{formatTimeRange(t.dueTime, t.endTime)}</span>}
                 <PriorityChip level={t.priority} />
               </div>
             ))}
@@ -2529,7 +2909,7 @@ const NewProjectButton = ({ onCreateProject }) => {
             />
 
             <label className="tfh-label" htmlFor="np-deadline">Deadline <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional)</span></label>
-            <input id="np-deadline" type="date" className="tfh-input" style={{ marginBottom: 20 }} value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+            <DateField id="np-deadline" style={{ marginBottom: 20 }} value={deadline} onChange={setDeadline} ariaLabel="Project deadline" />
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
               <button type="button" className="tfh-btn" onClick={close} disabled={creating}>Cancel</button>
@@ -3577,7 +3957,7 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects, focus 
         <>
           <div className="tfh-card" style={{ padding: 20 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-              <input type="date" className="tfh-input" style={{ width: "auto" }} value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} max={localDateStr()} />
+              <DateField style={{ width: 160 }} value={selectedDate} onChange={setSelectedDate} max={localDateStr()} ariaLabel="Log date" />
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {saved && <span style={{ fontSize: 12, color: "var(--stage-done)" }}>Saved</span>}
                 {/* Add activity is always available at the top (no scrolling
@@ -3714,18 +4094,42 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects, focus 
   );
 };
 
-const DocumentsView = ({ workspaceId, projectId, projectName, canManage }) => {
+// `projectId` is the app's currently-selected project and seeds the picker;
+// after that the picker owns which project is shown, so you can browse
+// another project's files without leaving the page or changing what the
+// rest of the app is pointed at.
+//
+// `canManage` is deliberately NOT passed in pre-decided: whether you can
+// upload here depends on the project you've PICKED, not the one selected in
+// the sidebar. Getting that wrong would have shown an Upload button on a
+// project you don't lead (and the server would then reject it).
+const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorkspaceManager, currentUserId }) => {
+  const [selectedId, setSelectedId] = useState(projectId || "");
+  // Follow the sidebar when it changes — switching project there and then
+  // opening Files should show that project, not whatever was last picked.
+  useEffect(() => { if (projectId) setSelectedId(projectId); }, [projectId]);
+
+  const selectedProject = projects?.find((p) => p.id === selectedId);
+  const canManage = isWorkspaceManager || selectedProject?.leadId === currentUserId;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const fileInputRef = useRef(null);
+  // Not everything worth keeping here is a file to upload — a lot of the
+  // department's reference material already lives in Google Drive. Links
+  // sit alongside the uploads rather than in a separate place.
+  const [links, setLinks] = useState([]);
 
   const load = async () => {
     setLoading(true);
     try {
-      const { documents } = await api.getDocuments(workspaceId, projectId);
+      const [{ documents }, { links: rows }] = await Promise.all([
+        api.getDocuments(workspaceId, selectedId),
+        api.getProjectLinks(workspaceId, selectedId),
+      ]);
       setItems(documents);
+      setLinks(rows);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -3733,7 +4137,16 @@ const DocumentsView = ({ workspaceId, projectId, projectName, canManage }) => {
     }
   };
 
-  useEffect(() => { load(); }, [workspaceId, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const addLink = async (label, url) => {
+    const { link } = await api.addProjectLink(workspaceId, selectedId, label, url);
+    setLinks((prev) => [...prev, link]);
+  };
+  const removeLink = async (linkId) => {
+    await api.deleteProjectLink(workspaceId, selectedId, linkId);
+    setLinks((prev) => prev.filter((l) => l.id !== linkId));
+  };
+
+  useEffect(() => { if (selectedId) load(); }, [workspaceId, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFiles = async (fileList) => {
     const files = Array.from(fileList || []);
@@ -3741,7 +4154,7 @@ const DocumentsView = ({ workspaceId, projectId, projectName, canManage }) => {
     setUploading(true);
     setError("");
     try {
-      for (const file of files) await api.uploadDocument(workspaceId, projectId, file);
+      for (const file of files) await api.uploadDocument(workspaceId, selectedId, file);
       await load();
     } catch (err) {
       setError(err.message);
@@ -3753,7 +4166,7 @@ const DocumentsView = ({ workspaceId, projectId, projectName, canManage }) => {
 
   const remove = async (id) => {
     try {
-      await api.deleteDocument(workspaceId, projectId, id);
+      await api.deleteDocument(workspaceId, selectedId, id);
       setItems((prev) => prev.filter((d) => d.id !== id));
     } catch (err) {
       setError(err.message);
@@ -3765,17 +4178,45 @@ const DocumentsView = ({ workspaceId, projectId, projectName, canManage }) => {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>Files</div>
-          <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>Reference documents for {projectName || "this project"} — visible to everyone here, not tied to a single task.</div>
+          <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>Reference documents and links, kept per project — visible to everyone here, not tied to a single task.</div>
         </div>
-        {canManage && (
-          <>
-            <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => handleFiles(e.target.files)} />
-            <button className="tfh-btn tfh-btn-accent" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-              <Upload size={14} /> {uploading ? "Uploading…" : "Upload file"}
-            </button>
-          </>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {/* Pick which project's files you're looking at, without leaving
+              the page. Completed projects stay in the list — their files are
+              often exactly what someone comes here for. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <FolderKanban size={14} color="var(--text-faint)" />
+            <select
+              className="tfh-input"
+              style={{ fontSize: 12.5, minWidth: 210, paddingTop: 7, paddingBottom: 7 }}
+              value={selectedId}
+              onChange={(e) => setSelectedId(e.target.value)}
+              aria-label="Show files for project"
+            >
+              {(projects || []).map((p) => (
+                <option key={p.id} value={p.id}>{p.name}{p.completedAt ? " (completed)" : ""}</option>
+              ))}
+            </select>
+          </div>
+          {canManage && (
+            <>
+              <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => handleFiles(e.target.files)} />
+              <button className="tfh-btn tfh-btn-accent" onClick={() => fileInputRef.current?.click()} disabled={uploading || !selectedId}>
+                <Upload size={14} /> {uploading ? "Uploading…" : "Upload file"}
+              </button>
+            </>
+          )}
+        </div>
       </div>
+
+      {/* A plain member looking at a project they don't lead can read
+          everything here but not add to it — say so, rather than just
+          silently hiding the controls. */}
+      {!canManage && selectedProject && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-dim)", background: "var(--raised)", padding: "9px 12px", borderRadius: 10 }}>
+          <Lock size={13} /> View only — your admin, team lead, or this project's lead can add files and links here.
+        </div>
+      )}
 
       {error && <div style={{ fontSize: 12.5, color: "var(--pri-high)" }}>{error}</div>}
 
@@ -3785,14 +4226,33 @@ const DocumentsView = ({ workspaceId, projectId, projectName, canManage }) => {
         <div className="tfh-card" style={{ padding: 30, textAlign: "center" }}>
           <FolderOpen size={22} color="var(--text-faint)" style={{ marginBottom: 8 }} />
           <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
-            {canManage ? "No files yet — upload circulars, guidelines, or reference material for the whole team." : "No files here yet."}
+            {canManage
+              ? `No files in ${selectedProject?.name || "this project"} yet — upload circulars, guidelines, or reference material for the whole team.`
+              : `No files in ${selectedProject?.name || "this project"} yet.`}
           </div>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {items.map((doc) => (
-            <DocumentRow key={doc.id} doc={doc} workspaceId={workspaceId} projectId={projectId} canManage={canManage} onRemove={() => remove(doc.id)} />
+            <DocumentRow key={doc.id} doc={doc} workspaceId={workspaceId} projectId={selectedId} canManage={canManage} onRemove={() => remove(doc.id)} />
           ))}
+        </div>
+      )}
+
+      {/* Pasted links — Google Drive, Sheets, anything on the web. Uses the
+          same LinksList control (and the same project-links API) already
+          used on milestones, rather than inventing a second one. */}
+      {!loading && (
+        <div className="tfh-card" style={{ padding: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <Link2 size={14} color="var(--accent)" />
+            <span style={{ fontSize: 13, fontWeight: 700 }}>Links</span>
+            {links.length > 0 && <span className="tfh-chip" style={{ fontSize: 10, background: "var(--raised)", color: "var(--text-dim)" }}>{links.length}</span>}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 10 }}>
+            Paste a Google Drive file or folder link, a Sheet, or any other URL — no upload needed.
+          </div>
+          <LinksList links={links} canManage={canManage} onAdd={addLink} onRemove={removeLink} />
         </div>
       )}
     </div>
@@ -3934,7 +4394,7 @@ const MilestoneCard = ({ milestone, index, total, canManage, onEdit, onDelete, o
       <form onSubmit={save} className="tfh-card" style={{ padding: 18 }}>
         <input autoFocus className="tfh-input" placeholder="Milestone title" value={title} onChange={(e) => setTitle(e.target.value)} style={{ marginBottom: 10 }} />
         <textarea className="tfh-input" rows={2} placeholder="Description" value={description} onChange={(e) => setDescription(e.target.value)} style={{ marginBottom: 10, resize: "vertical" }} />
-        <input type="date" className="tfh-input" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} style={{ marginBottom: 12 }} />
+        <DateField value={targetDate} onChange={setTargetDate} style={{ marginBottom: 12 }} ariaLabel="Target date" />
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button type="button" className="tfh-btn" onClick={() => setEditing(false)}>Cancel</button>
           <button className="tfh-btn tfh-btn-accent" disabled={saving || !title.trim()}>{saving ? "Saving…" : "Save"}</button>
@@ -4097,11 +4557,11 @@ const ProjectInfoCard = ({ workspaceId, projectId, project, canManage, onProject
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 6 }}>
           <div>
             <label className="tfh-label" htmlFor="proj-edit-start">Start date</label>
-            <input id="proj-edit-start" type="date" className="tfh-input" value={startDate || ""} onChange={(e) => setStartDate(e.target.value)} />
+            <DateField id="proj-edit-start" value={startDate || ""} onChange={setStartDate} ariaLabel="Project start date" />
           </div>
           <div>
             <label className="tfh-label" htmlFor="proj-edit-deadline">Deadline</label>
-            <input id="proj-edit-deadline" type="date" className="tfh-input" value={deadline || ""} onChange={(e) => setDeadline(e.target.value)} />
+            <DateField id="proj-edit-deadline" value={deadline || ""} onChange={setDeadline} ariaLabel="Project deadline" />
           </div>
         </div>
         <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 14 }}>
@@ -4307,7 +4767,7 @@ const MilestonesView = ({ workspaceId, projectId, project, canManage, isAdmin, u
               <form onSubmit={createNew} className="tfh-card" style={{ padding: 18, borderColor: "var(--accent)" }}>
                 <input autoFocus className="tfh-input" placeholder="Milestone title" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} style={{ marginBottom: 10 }} />
                 <textarea className="tfh-input" rows={2} placeholder="Description (optional)" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} style={{ marginBottom: 10, resize: "vertical" }} />
-                <input type="date" className="tfh-input" value={newDate} onChange={(e) => setNewDate(e.target.value)} style={{ marginBottom: 14 }} />
+                <DateField value={newDate} onChange={setNewDate} style={{ marginBottom: 14 }} ariaLabel="Holiday date" />
 
                 <label className="tfh-label" style={{ fontSize: 10 }}>Links</label>
                 {newLinks.length > 0 && (
@@ -4516,6 +4976,68 @@ const SystemHealthView = () => {
   );
 };
 
+// Renaming the workspace. The name is the app's wordmark — the sidebar and
+// every screen header render it — so it belongs in the product, not in a
+// database console. Admin only, matching the server-side check.
+const WorkspaceSettings = ({ workspaceId, currentName, onRenamed }) => {
+  const [name, setName] = useState(currentName || "");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+
+  // Keep the field in step if the workspace is renamed elsewhere (another
+  // admin, another tab) rather than stranding a stale value in the input.
+  useEffect(() => { setName(currentName || ""); }, [currentName]);
+
+  const dirty = name.trim() && name.trim() !== currentName;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!dirty) return;
+    setBusy(true);
+    setError("");
+    setSaved(false);
+    try {
+      await api.renameWorkspace(workspaceId, name.trim());
+      await onRenamed();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      setError(err.message || "Couldn't rename the workspace.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="tfh-card" style={{ padding: 20, maxWidth: 520 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <Building2 size={15} color="var(--accent)" />
+        <span style={{ fontSize: 13.5, fontWeight: 700 }}>Workspace name</span>
+      </div>
+      <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.5 }}>
+        This is what appears at the top of the sidebar and on every screen. Changing it
+        updates it for everyone in the workspace immediately.
+      </div>
+      <form onSubmit={submit} style={{ display: "flex", gap: 8 }}>
+        <input
+          className="tfh-input" value={name} onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. DAMC" maxLength={80} aria-label="Workspace name"
+        />
+        <button className="tfh-btn tfh-btn-accent" disabled={busy || !dirty} style={{ flexShrink: 0 }}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </form>
+      {saved && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--accent)", marginTop: 10 }}>
+          <Check size={13} /> Renamed — the sidebar is updated.
+        </div>
+      )}
+      {error && <div style={{ fontSize: 12.5, color: "var(--pri-high)", marginTop: 10 }}>{error}</div>}
+    </div>
+  );
+};
+
 const AdminPanelView = (props) => {
   const [tab, setTab] = useState("health");
 
@@ -4532,10 +5054,17 @@ const AdminPanelView = (props) => {
       <div style={{ display: "flex", gap: 8 }}>
         <button className={`tfh-btn ${tab === "health" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("health")}><Shield size={13} /> System Performance</button>
         <button className={`tfh-btn ${tab === "team" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("team")}><Users size={13} /> Team Management</button>
+        <button className={`tfh-btn ${tab === "workspace" ? "tfh-btn-accent" : ""}`} onClick={() => setTab("workspace")}><Building2 size={13} /> Workspace</button>
       </div>
 
       {tab === "health" ? (
         <SystemHealthView />
+      ) : tab === "workspace" ? (
+        <WorkspaceSettings
+          workspaceId={props.workspaceId}
+          currentName={props.workspaceName}
+          onRenamed={props.onWorkspaceRenamed}
+        />
       ) : (
         <TeamView
           tasks={props.tasks} users={props.users} currentUser={props.currentUser} onOpen={props.onOpen}
@@ -4871,7 +5400,7 @@ const CreateProjectScreen = ({ canManage, onCreate, workspaceName, logout }) => 
           <label className="tfh-label" htmlFor="proj-desc">Description (optional)</label>
           <textarea id="proj-desc" className="tfh-input" rows={2} placeholder="What is this project about?" value={description} onChange={(e) => setDescription(e.target.value)} style={{ marginBottom: 14, resize: "vertical" }} />
           <label className="tfh-label" htmlFor="proj-deadline">Deadline <span style={{ textTransform: "none", fontWeight: 400 }}>(optional)</span></label>
-          <input id="proj-deadline" type="date" className="tfh-input" value={deadline} onChange={(e) => setDeadline(e.target.value)} style={{ marginBottom: 16 }} />
+          <DateField id="proj-deadline" value={deadline} onChange={setDeadline} style={{ marginBottom: 16 }} ariaLabel="Project deadline" />
           {error && <div style={{ fontSize: 12.5, color: "var(--pri-high)", marginBottom: 14 }}>{error}</div>}
           <button className="tfh-btn tfh-btn-accent" style={{ width: "100%", padding: "10px 14px" }} disabled={busy || !name.trim()}>
             {busy ? "Creating…" : "Create project"}
@@ -4983,7 +5512,7 @@ const EditProfileModal = ({ member, currentUser, workspaceId, onClose, onProfile
 function Workspace() {
   const { user, logout, setUser } = useAuth();
   const { theme, toggle } = useTheme();
-  const { current, currentId, loading: workspaceLoading } = useWorkspace();
+  const { current, currentId, loading: workspaceLoading, refresh: refreshWorkspaces } = useWorkspace();
   const { projects, current: currentProject, currentId: projectId, loading: projectsLoading, create: createProject, refresh: refreshProjects, switchTo: switchProject } = useProject();
 
   const [tasks, setTasks] = useState([]);
@@ -5134,15 +5663,20 @@ function Workspace() {
         // client-side and the server rejects it regardless).
         const isOwnTask = draft.assigneeId === user.id;
         const patch = canManage
-          ? { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, assigneeId: draft.assigneeId, due: draft.due, dueTime: draft.dueTime || null }
+          ? { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, assigneeId: draft.assigneeId, due: draft.due, dueTime: draft.dueTime || null, endTime: draft.endTime || null }
           : isOwnTask
-            ? { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, due: draft.due, dueTime: draft.dueTime || null }
+            ? { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, due: draft.due, dueTime: draft.dueTime || null, endTime: draft.endTime || null }
             : { status: draft.status };
         // The repeat rule only ever travels on the series head — the server
         // rejects it on an occurrence, and sending it unchanged from one
         // would be a pointless round trip anyway.
-        if ((canManage || isOwnTask) && !draft.recurrenceParentId) {
-          patch.recurrence = draft.recurrence || null;
+        if (canManage || isOwnTask) {
+          // On the series head this carries the whole rule. On an occurrence
+          // only `null` is meaningful — "stop repeating" — and the server
+          // applies it to the series head. Sending it unchanged from an
+          // occurrence would be a no-op round trip, so skip that case.
+          if (!draft.recurrenceParentId) patch.recurrence = draft.recurrence || null;
+          else if (draft.stopSeries) patch.recurrence = null;
         }
         // If the project was changed (fixing a mis-file), include it — but
         // the API call must still go to the ORIGINAL project's path, since
@@ -5160,9 +5694,9 @@ function Workspace() {
         // atomically with the task server-side); pendingFiles can't — those
         // upload as a real follow-up request right below, once the task has
         // an id to attach to.
-        const { title, description, status, priority, assigneeId, due, dueTime, recurrence } = draft;
+        const { title, description, status, priority, assigneeId, due, dueTime, endTime, recurrence } = draft;
         const { task } = await api.createTask(currentId, taskProjectId, {
-          title, description, status, priority, assigneeId, due, dueTime,
+          title, description, status, priority, assigneeId, due, dueTime, endTime: endTime || null,
           recurrence: recurrence || null,
           subtasks: cleanSubtasks, links: draft.pendingLinks,
         });
@@ -5198,7 +5732,7 @@ function Workspace() {
           setSaveError(`Saved, but ${failed.length === 1 ? "this didn't" : "these didn't"} upload: ${failed.join(", ")}. You can try adding ${failed.length === 1 ? "it" : "them"} again below.`);
           return;
         }
-      } else if (draft.recurrence || savedTask.recurrence) {
+      } else if (draft.recurrence || savedTask.recurrence || draft.stopSeries) {
         // A repeat rule creates or removes sibling occurrences server-side,
         // so patching the single saved task into local state isn't enough —
         // refetch so the board/calendar show the whole series right away.
@@ -5385,11 +5919,18 @@ function Workspace() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 24px", borderBottom: "1px solid var(--line)" }}>
           <button className="tfh-btn tfh-btn-ghost tfh-show-mobile-only" onClick={() => setMobileNavOpen(true)} aria-label="Open menu"><Menu size={16} /></button>
-          <span className="tfh-mono" style={{ fontSize: 11, color: "var(--text-faint)" }}>
+          <span className="tfh-mono tfh-hide-mobile" style={{ fontSize: 11, color: "var(--text-faint)", flexShrink: 0 }}>
             {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
           </span>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-            <button className="tfh-btn" onClick={() => openCreate("todo")}><Plus size={14} /> Quick add</button>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
+            {/* Search sits with the other top-right actions, left of Quick
+                add — it's a tool you reach for, not page furniture. */}
+            <GlobalSearch
+              workspaceId={currentId} tasks={tasks} users={users} currentUserId={user.id}
+              onOpenTask={openEdit}
+              onOpenActivityDay={(hit) => goToActivityLog({ entryDate: hit.entryDate, author: hit.author })}
+            />
+            <button className="tfh-btn" style={{ flexShrink: 0 }} onClick={() => openCreate("todo")}><Plus size={14} /> Quick add</button>
             <NotificationBell
               notifications={notifications} onOpenTask={openEditById}
               onMarkRead={markRead} onMarkAll={markAllRead}
@@ -5429,7 +5970,13 @@ function Workspace() {
           {view === "team" && <TeamView tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} onSetRole={setRole} onSetTitle={setTitle} onRemoveMember={removeMember} onInvite={invite} canManage={canManage} workspaceId={currentId} projects={projects} onSetProjectLead={setProjectLeadFor} />}
           {view === "activity" && <ActivityLogView workspaceId={currentId} currentUser={currentUser} canManage={canManage} projects={projects} focus={activityFocus} />}
           {view === "calendar" && <CalendarView tasks={tasks} users={users} onOpen={openEdit} workspaceId={currentId} canManage={canManage} />}
-          {view === "files" && <DocumentsView workspaceId={currentId} projectId={projectId} projectName={currentProject?.name} canManage={canManageProject} />}
+          {view === "files" && (
+            <DocumentsView
+              workspaceId={currentId} projectId={projectId} projects={projects}
+              projectName={currentProject?.name}
+              isWorkspaceManager={canManage} currentUserId={user.id}
+            />
+          )}
           {view === "milestones" && (
             <MilestonesView workspaceId={currentId} projectId={projectId} project={currentProject} canManage={canManageProject} isAdmin={currentUser.role === "admin"} users={users} onProjectUpdated={() => refreshProjects()} />
           )}
@@ -5439,6 +5986,7 @@ function Workspace() {
               tasks={tasks} projects={projects} onOpen={openEdit}
               onSetRole={setRole} onSetTitle={setTitle} onRemoveMember={removeMember} onInvite={invite}
               canManage={canManage} workspaceId={currentId} onSetProjectLead={setProjectLeadFor}
+              workspaceName={current?.name} onWorkspaceRenamed={refreshWorkspaces}
             />
           )}
         </div>
