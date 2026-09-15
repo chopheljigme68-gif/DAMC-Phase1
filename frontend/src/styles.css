@@ -53,6 +53,40 @@
   --backdrop: rgba(20, 22, 30, 0.35);
 }
 
+/* Warm — a light theme on paper rather than on white. Same structure and
+   the same brand green, but every neutral carries a warm (amber/brown) cast
+   instead of the cool blue-grey of the light theme, which is easier on the
+   eyes under long office use and warm office lighting.
+
+   The status colours are shifted warm too (deeper reds, ochre amber) so they
+   sit in the same family as the neutrals — dropping the cool-theme values in
+   unchanged makes them glare against a cream ground. They stay clearly
+   distinct from the brand green, per the palette rule in CLAUDE.md. */
+:root[data-theme="warm"] {
+  --ink: #f4ecdf;
+  --panel: #fdf8f0;
+  --raised: #efe4d3;
+  --line: #ddcdb6;
+  --text: #2c231a;
+  --text-dim: #6b5a48;
+  --text-faint: #9c8973;
+  --accent: #1d7038;
+  --accent-ink: #fffaf3;
+  --accent-soft: #1d70381f;
+  --stage-backlog: #8a7a66;
+  --stage-progress: #a9631f;
+  --stage-review: #1d7038;
+  --stage-done: #1c8375;
+  --pri-low: #1c8375;
+  --pri-medium: #b2741a;
+  --pri-high: #bf4430;
+  --date-scheduled: #9a5a12;
+  --chart-grid: #ddcdb6;
+  --chart-tick: #6b5a48;
+  --chart-tooltip-bg: #fdf8f0;
+  --backdrop: rgba(56, 42, 28, 0.38);
+}
+
 * { box-sizing: border-box; }
 
 html, body, #root {

@@ -5,7 +5,7 @@ import {
   Flag, ChevronLeft, ChevronRight, Trash2, GripVertical, ArrowRight, Menu, Sparkles,
   Bell, Crown, Sun, Moon, LogOut, AlertTriangle, Loader2, RefreshCw,
   UserPlus, ChevronDown, ChevronUp, Building2, Shield, FolderKanban, Lock,
-  Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, BookOpen, Table as TableIcon, CheckCircle2, UserX, Repeat, CalendarRange,
+  Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, BookOpen, Table as TableIcon, CheckCircle2, UserX, Repeat, CalendarRange, Laptop, Coffee,
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -1966,6 +1966,80 @@ const GlobalSearch = ({ workspaceId, tasks, users, currentUserId, onOpenTask, on
               ))}
             </>
           )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Theme picker. A single toggle only ever worked for two themes; with a
+// third (warm) and a "follow the system" option it has to be a real choice
+// list. Same popover mechanics as the notification bell and account menu.
+const THEME_OPTIONS = [
+  { id: "system", label: "System", icon: Laptop, hint: "Follow my device" },
+  { id: "light", label: "Light", icon: Sun, hint: "Cool and bright" },
+  { id: "warm", label: "Warm", icon: Coffee, hint: "Easier on the eyes" },
+  { id: "dark", label: "Dark", icon: Moon, hint: "Low light" },
+];
+
+const ThemeMenu = ({ preference, theme, systemTheme, onPick }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onClick); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  // The button shows what's actually PAINTED, so the icon always matches
+  // what you're looking at — including when "System" flips at sunset.
+  const painted = THEME_OPTIONS.find((o) => o.id === theme) || THEME_OPTIONS[3];
+  const PaintedIcon = painted.icon;
+  const current = THEME_OPTIONS.find((o) => o.id === preference);
+
+  return (
+    <div style={{ position: "relative" }} ref={ref}>
+      <button
+        className="tfh-btn tfh-btn-ghost" style={{ padding: 8 }}
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu" aria-expanded={open}
+        aria-label={`Theme: ${current?.label || "Dark"}`}
+        title={`Theme: ${current?.label || "Dark"}`}
+      >
+        <PaintedIcon size={16} />
+      </button>
+
+      {open && (
+        <div className="tfh-card tfh-fade-in" role="menu" style={{ position: "absolute", right: 0, top: 44, width: 214, zIndex: 30, padding: 6 }}>
+          {THEME_OPTIONS.map((o) => {
+            const Icon = o.icon;
+            const active = preference === o.id;
+            return (
+              <button
+                key={o.id} role="menuitemradio" aria-checked={active}
+                onClick={() => { onPick(o.id); setOpen(false); }}
+                className="tfh-account-item"
+                style={{ background: active ? "var(--raised)" : "transparent", color: active ? "var(--accent)" : "var(--text)" }}
+              >
+                <Icon size={14} style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  {o.label}
+                  {/* Say which way System is currently resolving, so it's not
+                      a mystery which theme you'll get. */}
+                  {/* Reports what the DEVICE says, not what's currently
+                      painted — those differ whenever an explicit theme is
+                      selected, and showing the painted one made this hint
+                      lie about what picking System would give you. */}
+                  {o.id === "system" && <span style={{ color: "var(--text-faint)", fontWeight: 400 }}> · {systemTheme === "dark" ? "dark now" : "light now"}</span>}
+                </span>
+                {active && <Check size={13} style={{ flexShrink: 0 }} />}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -5511,7 +5585,7 @@ const EditProfileModal = ({ member, currentUser, workspaceId, onClose, onProfile
 /* ------------------------------------------------------------------ */
 function Workspace() {
   const { user, logout, setUser } = useAuth();
-  const { theme, toggle } = useTheme();
+  const { theme, preference, systemTheme, setPreference } = useTheme();
   const { current, currentId, loading: workspaceLoading, refresh: refreshWorkspaces } = useWorkspace();
   const { projects, current: currentProject, currentId: projectId, loading: projectsLoading, create: createProject, refresh: refreshProjects, switchTo: switchProject } = useProject();
 
@@ -5936,9 +6010,7 @@ function Workspace() {
               onMarkRead={markRead} onMarkAll={markAllRead}
               permission={permission} onRequestPermission={requestPermission}
             />
-            <button className="tfh-btn tfh-btn-ghost" style={{ padding: 8 }} onClick={toggle} aria-label="Toggle theme">
-              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-            </button>
+            <ThemeMenu preference={preference} theme={theme} systemTheme={systemTheme} onPick={setPreference} />
             <div style={{ width: 1, height: 22, background: "var(--line)", margin: "0 2px", flexShrink: 0 }} />
             <AccountMenu
               member={currentUser}
