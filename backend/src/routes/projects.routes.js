@@ -66,11 +66,24 @@ router.delete("/:projectId", requireRole("admin", "lead"), async (req, res, next
 router.patch("/:projectId", requireProjectInWorkspace, requireProjectManager, async (req, res, next) => {
   try {
     const { name, description, deadline, startDate } = req.body || {};
-    if (!name || !name.trim()) return res.status(400).json({ error: "Project name is required" });
-    if (deadline && startDate && new Date(startDate) > new Date(deadline)) {
+    // Partial: a rename sends only `name`, the project form sends the lot.
+    // Validate whatever was sent; never require fields the caller isn't
+    // trying to change.
+    if (name !== undefined && !String(name).trim()) return res.status(400).json({ error: "Project name is required" });
+    if (name !== undefined && String(name).trim().length > 120) return res.status(400).json({ error: "Keep the project name under 120 characters" });
+
+    const effectiveStart = startDate !== undefined ? startDate : req.project.startDate;
+    const effectiveDeadline = deadline !== undefined ? deadline : req.project.deadline;
+    if (effectiveDeadline && effectiveStart && new Date(effectiveStart) > new Date(effectiveDeadline)) {
       return res.status(400).json({ error: "Start date can't be after the deadline" });
     }
-    const project = await updateProject(req.params.projectId, { name: name.trim(), description, deadline, startDate });
+
+    const patch = {};
+    if (name !== undefined) patch.name = String(name).trim();
+    if (description !== undefined) patch.description = description;
+    if (deadline !== undefined) patch.deadline = deadline;
+    if (startDate !== undefined) patch.startDate = startDate;
+    const project = await updateProject(req.params.projectId, patch);
     broadcastProjectsChanged(req.params.workspaceId);
     res.json({ project });
   } catch (err) { next(err); }

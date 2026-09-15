@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import {
-  LayoutDashboard, Columns3, Users, CalendarDays, Search, Plus, X, Check,
-  Flag, ChevronLeft, ChevronRight, Trash2, GripVertical, ArrowRight, Menu, Sparkles,
-  Bell, Crown, Sun, Moon, LogOut, AlertTriangle, Loader2, RefreshCw,
+  LayoutDashboard, SquareKanban, Users, CalendarDays, Search, Plus, X, Check,
+  Flag, ChevronLeft, ChevronRight, Trash2, Menu,
+  Bell, BadgeCheck, Sun, Moon, LogOut, AlertTriangle, Loader2, RefreshCw,
   UserPlus, ChevronDown, ChevronUp, Building2, Shield, FolderKanban, Lock,
-  Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, BookOpen, Table as TableIcon, CheckCircle2, UserX, Repeat, CalendarRange, Laptop, Coffee,
+  Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, NotebookPen, Table as TableIcon, CheckCircle2, UserX, Repeat, CalendarRange, Monitor, Sunset,
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -44,8 +44,8 @@ const PRIORITIES = {
 const isUrgent = (level) => level === "high";
 const NAV = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "activity", label: "Collaboration Log", icon: BookOpen },
-  { id: "board", label: "Board", icon: Columns3 },
+  { id: "activity", label: "Collaboration Log", icon: NotebookPen },
+  { id: "board", label: "Board", icon: SquareKanban },
   { id: "files", label: "Files", icon: FolderOpen },
   { id: "milestones", label: "Milestones", icon: Flag },
   { id: "team", label: "Team", icon: Users },
@@ -302,7 +302,7 @@ const Avatar = ({ member, size = 28 }) => {
         <UserX size={size * 0.55} color="var(--text-faint)" />
       )}
       {member?.role === "lead" && (
-        <Crown size={size * 0.42} color="#12141c" fill="var(--accent)" style={{ position: "absolute", top: -size * 0.32, right: -size * 0.12 }} />
+        <BadgeCheck size={size * 0.42} color="#12141c" fill="var(--accent)" style={{ position: "absolute", top: -size * 0.32, right: -size * 0.12 }} />
       )}
       {member?.role === "admin" && (
         <Shield size={size * 0.4} color="#12141c" fill="var(--stage-done)" style={{ position: "absolute", top: -size * 0.3, right: -size * 0.14 }} />
@@ -760,6 +760,22 @@ const Comments = ({ workspaceId, projectId, taskId, canComment, currentUserId })
   };
 
   useEffect(() => { load(); }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Comments used to load ONCE, on open. So if you had a task open while a
+  // colleague commented on it, you never saw their comment — the reported
+  // "member's comment doesn't appear for anyone else". The server already
+  // broadcasts every comment; this just listens for it. Scoped to this task
+  // so an unrelated comment elsewhere doesn't cause a refetch.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+    const onTaskChanged = (payload) => {
+      if (payload?.reason === "comment" && payload?.taskId === taskId) load();
+    };
+    socket.on("task:changed", onTaskChanged);
+    return () => socket.off("task:changed", onTaskChanged);
+  }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight; }, [items.length]);
 
   const submit = async (e) => {
@@ -1951,7 +1967,7 @@ const GlobalSearch = ({ workspaceId, tasks, users, currentUserId, onOpenTask, on
                   <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
                     {r.kind === "task"
                       ? <span style={{ width: 7, height: 7, borderRadius: 999, background: r.task.status === "done" ? "var(--stage-done)" : "var(--stage-progress)", flexShrink: 0 }} />
-                      : <BookOpen size={12} color="var(--accent)" style={{ flexShrink: 0 }} />}
+                      : <NotebookPen size={12} color="var(--accent)" style={{ flexShrink: 0 }} />}
                     <span style={{ fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</span>
                   </span>
                   <span style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0 }}>
@@ -1976,9 +1992,9 @@ const GlobalSearch = ({ workspaceId, tasks, users, currentUserId, onOpenTask, on
 // third (warm) and a "follow the system" option it has to be a real choice
 // list. Same popover mechanics as the notification bell and account menu.
 const THEME_OPTIONS = [
-  { id: "system", label: "System", icon: Laptop, hint: "Follow my device" },
+  { id: "system", label: "System", icon: Monitor, hint: "Follow my device" },
   { id: "light", label: "Light", icon: Sun, hint: "Cool and bright" },
-  { id: "warm", label: "Warm", icon: Coffee, hint: "Easier on the eyes" },
+  { id: "warm", label: "Warm", icon: Sunset, hint: "Easier on the eyes" },
   { id: "dark", label: "Dark", icon: Moon, hint: "Low light" },
 ];
 
@@ -2344,7 +2360,7 @@ const AgendaRow = ({ item, onOpen, onOpenActivity }) => {
 // inside someone's day entry. This shows everything that block holds (time,
 // what was worked on, notes, project, links) plus who logged it and when,
 // read-only, with a way through to the full Collaboration Log entry.
-const ActivityDetailModal = ({ item, projects, onClose, onGoToLog }) => {
+const ActivityDetailModal = ({ item, projects, onClose }) => {
   const block = item.block || {};
   const links = block.links || [];
   const projectName = projects?.find((p) => p.id === block.projectId)?.name;
@@ -2413,10 +2429,7 @@ const ActivityDetailModal = ({ item, projects, onClose, onGoToLog }) => {
           </>
         )}
 
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
-          <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 12 }} onClick={() => onGoToLog(item)}>
-            <BookOpen size={13} /> Open in Collaboration Log
-          </button>
+        <div style={{ display: "flex", justifyContent: "flex-end", borderTop: "1px solid var(--line)", paddingTop: 16 }}>
           <button className="tfh-btn tfh-btn-accent" onClick={onClose}>Close</button>
         </div>
       </div>
@@ -2440,15 +2453,20 @@ const AgendaCard = ({ title, items, onOpen, onOpenActivity, emptyText }) => (
 // Collapsed by default (name + a compact count), expandable on click — the
 // fix for "looks packed" once there are several team members: previously
 // every single person's full agenda rendered at once, stacking up fast.
-const TeamMemberAgenda = ({ member, items, onOpen, onOpenActivity, emptyText, onAssignTask, pendingCount }) => {
+const TeamMemberAgenda = ({ member, items, onOpen, onOpenActivity, emptyText, onAssignTask, pendingCount, dragProps, dragging }) => {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="tfh-card" style={{ padding: expanded ? 16 : "10px 14px" }}>
+    <div
+      className="tfh-card"
+      {...(dragProps || {})}
+      style={{ padding: expanded ? 16 : "10px 14px", opacity: dragging ? 0.45 : 1, cursor: dragProps ? "grab" : undefined }}
+    >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button
           onClick={() => setExpanded((e) => !e)}
           style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0, background: "none", border: "none", cursor: "pointer", padding: 0 }}
+          title={dragProps ? `${member.name} — drag to reorder` : member.name}
         >
           <Avatar member={member} size={22} />
           <span style={{ fontSize: 12.5, fontWeight: 700, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.name}</span>
@@ -2607,7 +2625,7 @@ const AllTeamsCollabsPanel = ({ workspaceId, day, setDay, tasks, users, currentU
   );
 };
 
-const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject, onAssignTask, projects, onGoActivityLog }) => {
+const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject, onAssignTask, projects }) => {
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
   const [myLogs, setMyLogs] = useState([]);
@@ -2620,6 +2638,26 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   // view, and keeps its own chosen day.
   const [allTeamsDay, setAllTeamsDay] = useState(localDateStr());
   const [activityDetail, setActivityDetail] = useState(null);
+
+  // Who you want at the top of Team Collabs is a personal arrangement of
+  // your own dashboard, not a fact about the workspace — so it's stored per
+  // browser rather than shared, and needs no schema change or permission
+  // rules about who may reorder whom. Stored per workspace, since the
+  // people differ.
+  const memberOrderKey = `pmdamc.teamOrder.${workspaceId}`;
+  const [memberOrder, setMemberOrder] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(memberOrderKey) || "[]"); } catch { return []; }
+  });
+  const [dragMemberId, setDragMemberId] = useState(null);
+
+  useEffect(() => {
+    try { setMemberOrder(JSON.parse(localStorage.getItem(`pmdamc.teamOrder.${workspaceId}`) || "[]")); } catch { setMemberOrder([]); }
+  }, [workspaceId]);
+
+  const persistMemberOrder = (ids) => {
+    setMemberOrder(ids);
+    try { localStorage.setItem(memberOrderKey, JSON.stringify(ids)); } catch { /* private mode — in-memory only */ }
+  };
   const allTeamsOpen = teamTab === "all";
 
   useEffect(() => {
@@ -2795,6 +2833,15 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
     </div>
   );
 
+  // Saved order first, then anyone it doesn't mention (a new joiner) at the
+  // end — so adding a member never scrambles an arrangement, and a member
+  // who has left simply drops out.
+  const teamMembers = users.filter((u) => u.id !== currentUser?.id);
+  const orderedTeam = [
+    ...memberOrder.map((id) => teamMembers.find((u) => u.id === id)).filter(Boolean),
+    ...teamMembers.filter((u) => !memberOrder.includes(u.id)),
+  ];
+
   // Whichever tab is active decides what each team member's block shows —
   // same three concepts as the "All projects" style selector, applied to
   // the team's activity instead: what's already happened, what's happening
@@ -2837,7 +2884,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
         />
       )}
 
-      {!allTeamsOpen && users.filter((u) => u.id !== currentUser?.id).map((u) => {
+      {!allTeamsOpen && orderedTeam.map((u) => {
         let items = [];
         let emptyText = "Nothing here.";
         if (teamTab === "today") {
@@ -2869,9 +2916,33 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
           emptyText = "Nothing in the past 30 days.";
         }
         if (items.length === 0 && logsLoading) return null; // avoid a flash of empty state while still loading
-        return <TeamMemberAgenda key={u.id} member={u} items={items} onOpen={onOpen} onOpenActivity={setActivityDetail} emptyText={emptyText} onAssignTask={onAssignTask} />;
+        return (
+          <TeamMemberAgenda
+            key={u.id} member={u} items={items} onOpen={onOpen} onOpenActivity={setActivityDetail}
+            emptyText={emptyText} onAssignTask={onAssignTask}
+            dragging={dragMemberId === u.id}
+            dragProps={{
+              draggable: true,
+              onDragStart: () => setDragMemberId(u.id),
+              onDragOver: (e) => {
+                e.preventDefault();
+                if (!dragMemberId || dragMemberId === u.id) return;
+                const base = orderedTeam.map((m) => m.id);
+                const from = base.indexOf(dragMemberId);
+                const to = base.indexOf(u.id);
+                if (from === -1 || to === -1) return;
+                const next = [...base];
+                next.splice(from, 1);
+                next.splice(to, 0, dragMemberId);
+                persistMemberOrder(next);
+              },
+              onDragEnd: () => setDragMemberId(null),
+              onDrop: (e) => { e.preventDefault(); setDragMemberId(null); },
+            }}
+          />
+        );
       })}
-      {!allTeamsOpen && !logsLoading && users.filter((u) => u.id !== currentUser?.id).length === 0 && (
+      {!allTeamsOpen && !logsLoading && teamMembers.length === 0 && (
         <div className="tfh-card" style={{ padding: 18, textAlign: "center" }}>
           <div style={{ fontSize: 12, color: "var(--text-faint)" }}>No other team members yet.</div>
         </div>
@@ -2921,7 +2992,6 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
           item={activityDetail}
           projects={projects}
           onClose={() => setActivityDetail(null)}
-          onGoToLog={(item) => { setActivityDetail(null); onGoActivityLog?.(item); }}
         />
       )}
     </div>
@@ -2996,7 +3066,10 @@ const NewProjectButton = ({ onCreateProject }) => {
   );
 };
 
-const BoardView = ({ tasks, users, projects, onOpen, onComplete, onReopen, onAdd, onBulkAdd, onCreateProject, search, setSearch, priorityFilter, setPriorityFilter, assigneeFilter, setAssigneeFilter, statusFilter, setStatusFilter, projectFilter, setProjectFilter, canManage, currentUserId }) => {
+const BoardView = ({ tasks, users, projects, onOpen, onComplete, onReopen, onAdd, onBulkAdd, onCreateProject, search, setSearch, priorityFilter, setPriorityFilter, assigneeFilter, setAssigneeFilter, statusFilter, setStatusFilter, projectFilter, setProjectFilter, canManage, currentUserId, workspaceId, onOpenFiles }) => {
+  // A real project id — not "all", not a stale id for a project that's been
+  // deleted since.
+  const showFiles = projectFilter && projectFilter !== "all" && projects.some((p) => p.id === projectFilter);
   const filtered = tasks
     .filter((t) => {
       if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
@@ -3062,7 +3135,18 @@ const BoardView = ({ tasks, users, projects, onOpen, onComplete, onReopen, onAdd
         </div>
       </div>
 
-      <div className="tfh-board-grid" style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length}, minmax(0,1fr))`, gap: 14, flex: 1, overflowX: "auto", paddingBottom: 4, maxWidth: STAGES.length <= 2 ? 720 : "none" }}>
+      {/* The files column only appears when ONE project is selected — with
+          "All projects" there's no single set of files to show. It's a
+          sibling column of the stages so the board still reads as one grid. */}
+      <div
+        className="tfh-board-grid"
+        style={{
+          display: "grid",
+          gridTemplateColumns: showFiles ? `repeat(${STAGES.length}, minmax(0,1fr)) minmax(220px, 0.8fr)` : `repeat(${STAGES.length}, minmax(0,1fr))`,
+          gap: 14, flex: 1, overflowX: "auto", paddingBottom: 4,
+          maxWidth: STAGES.length <= 2 ? (showFiles ? 1040 : 720) : "none",
+        }}
+      >
         {STAGES.map((stage) => (
           <Column
             key={stage.id} stage={stage} users={users} canManage={canManage} canCreate={hasProjects} currentUserId={currentUserId} showProject={showProject}
@@ -3070,6 +3154,13 @@ const BoardView = ({ tasks, users, projects, onOpen, onComplete, onReopen, onAdd
             onOpen={onOpen} onAdd={onAdd} onComplete={onComplete} onReopen={onReopen}
           />
         ))}
+        {showFiles && (
+          <BoardFilesPanel
+            workspaceId={workspaceId} projectId={projectFilter}
+            projectName={projects.find((p) => p.id === projectFilter)?.name}
+            onOpenFiles={onOpenFiles}
+          />
+        )}
       </div>
     </div>
   );
@@ -3087,7 +3178,7 @@ const ROLE_BADGE_STYLE = {
 const RoleBadge = ({ role }) => (
   <span className="tfh-chip" style={ROLE_BADGE_STYLE[role] || ROLE_BADGE_STYLE.member}>
     {role === "admin" && <Shield size={11} />}
-    {role === "lead" && <Crown size={11} />}
+    {role === "lead" && <BadgeCheck size={11} />}
     {ROLE_LABEL[role] || role}
   </span>
 );
@@ -3232,7 +3323,7 @@ const TeamView = ({ tasks, users, currentUser, onOpen, onSetRole, onSetTitle, on
         return (
           <div className="tfh-card" style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <Crown size={16} color="var(--accent)" />
+              <BadgeCheck size={16} color="var(--accent)" />
               <div>
                 <div className="tfh-label" style={{ marginBottom: 2 }}>Team Lead</div>
                 {lead ? (
@@ -3800,6 +3891,16 @@ const ActivityComments = ({ workspaceId, logId, currentUser, initialCount }) => 
     if ((initialCount || 0) > 0 && !loaded) load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Same live-refresh as task comments: a colleague's reply shows up
+  // without needing to close and reopen the entry.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+    const onActivityComment = (payload) => { if (payload?.logId === logId) load(); };
+    socket.on("activity:comment", onActivityComment);
+    return () => socket.off("activity:comment", onActivityComment);
+  }, [logId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const toggle = () => {
     const next = !open;
     setOpen(next);
@@ -4177,6 +4278,86 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects, focus 
 // upload here depends on the project you've PICKED, not the one selected in
 // the sidebar. Getting that wrong would have shown an Upload button on a
 // project you don't lead (and the server would then reject it).
+// The Board's files column. Same data as the Files page, read-only and
+// condensed — the point is "what's attached to this project" at a glance
+// while you're looking at its tasks, not another place to manage files.
+// Only renders for ONE project: with "All projects" selected there's no
+// single set of files to show.
+const BoardFilesPanel = ({ workspaceId, projectId, projectName, onOpenFiles }) => {
+  const [docs, setDocs] = useState([]);
+  const [links, setLinks] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    setLoading(true);
+    Promise.all([api.getDocuments(workspaceId, projectId), api.getProjectLinks(workspaceId, projectId)])
+      .then(([d, l]) => { if (!cancelled) { setDocs(d.documents); setLinks(l.links); } })
+      .catch(() => { if (!cancelled) { setDocs([]); setLinks([]); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [workspaceId, projectId]);
+
+  const total = docs.length + links.length;
+
+  const openDoc = async (doc) => {
+    try {
+      const url = await api.getDocumentBlobUrl(workspaceId, projectId, doc.id);
+      const a = document.createElement("a");
+      a.href = url;
+      if ((doc.mimeType || "").startsWith("image/")) a.target = "_blank"; else a.download = doc.fileName;
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch { /* surfaced on the Files page, not worth a toast here */ }
+  };
+
+  return (
+    <div className="tfh-card" style={{ padding: 12, display: "flex", flexDirection: "column", minHeight: 200 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
+        <FolderOpen size={13} color="var(--accent)" />
+        <span style={{ fontSize: 12.5, fontWeight: 700 }}>Files</span>
+        {total > 0 && <span className="tfh-chip tfh-mono" style={{ background: "var(--raised)", color: "var(--text-dim)", fontSize: 10.5 }}>{total}</span>}
+        <button
+          onClick={onOpenFiles} className="tfh-btn tfh-btn-ghost"
+          style={{ marginLeft: "auto", fontSize: 10.5, padding: "2px 7px" }}
+          title={`Manage files for ${projectName || "this project"}`}
+        >
+          Manage
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: "14px 4px", textAlign: "center" }}><Spinner size={16} /></div>
+      ) : total === 0 ? (
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", padding: "4px 4px", lineHeight: 1.5 }}>
+          No files on this project yet.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, overflowY: "auto" }}>
+          {docs.map((d) => (
+            <button
+              key={d.id} onClick={() => openDoc(d)} className="tfh-search-result"
+              style={{ padding: "6px 8px", gap: 7 }} title={d.fileName}
+            >
+              {(d.mimeType || "").startsWith("image/") ? <ImageIcon size={12} color="var(--text-faint)" style={{ flexShrink: 0 }} /> : <FileText size={12} color="var(--text-faint)" style={{ flexShrink: 0 }} />}
+              <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.fileName}</span>
+            </button>
+          ))}
+          {links.map((l) => (
+            <a
+              key={l.id} href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer"
+              className="tfh-search-result" style={{ padding: "6px 8px", gap: 7, textDecoration: "none" }} title={l.url}
+            >
+              <Link2 size={12} color="var(--accent)" style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: 12, color: "var(--accent)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.label}</span>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorkspaceManager, currentUserId }) => {
   const [selectedId, setSelectedId] = useState(projectId || "");
   // Follow the sidebar when it changes — switching project there and then
@@ -4209,6 +4390,36 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
     } finally {
       setLoading(false);
     }
+  };
+
+  // Drag & drop onto the page. dragDepth counts enter/leave pairs: a single
+  // boolean flickers off the moment the pointer crosses a child element,
+  // which makes the highlight strobe as you move across the drop area.
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+
+  const onDragEnter = (e) => {
+    if (!canManage || !e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+  const onDragLeave = () => {
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  };
+  const onDragOver = (e) => {
+    if (!canManage || !e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault(); // without this the browser just opens the file
+    e.dataTransfer.dropEffect = "copy";
+  };
+  const onDrop = (e) => {
+    if (!canManage) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = e.dataTransfer?.files;
+    if (files?.length) handleFiles(files);
   };
 
   const addLink = async (label, url) => {
@@ -4248,7 +4459,20 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
   };
 
   return (
-    <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div
+      className="tfh-fade-in"
+      style={{ display: "flex", flexDirection: "column", gap: 20, position: "relative", minHeight: 420 }}
+      onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+    >
+      {dragging && (
+        <div className="tfh-dropzone" aria-hidden="true">
+          <Upload size={26} color="var(--accent)" />
+          <div style={{ fontSize: 15, fontWeight: 700, marginTop: 10 }}>Drop files to upload</div>
+          <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 4 }}>
+            They'll be added to {selectedProject?.name || "this project"}
+          </div>
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>Files</div>
@@ -4301,7 +4525,7 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
           <FolderOpen size={22} color="var(--text-faint)" style={{ marginBottom: 8 }} />
           <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
             {canManage
-              ? `No files in ${selectedProject?.name || "this project"} yet — upload circulars, guidelines, or reference material for the whole team.`
+              ? `No files in ${selectedProject?.name || "this project"} yet — drag files here, or use Upload file, for circulars, guidelines and reference material.`
               : `No files in ${selectedProject?.name || "this project"} yet.`}
           </div>
         </div>
@@ -4550,7 +4774,7 @@ const ProjectLeadCard = ({ workspaceId, projectId, project, isAdmin, users, onPr
     <div className="tfh-card" style={{ padding: 20 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: editing ? 12 : 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <Crown size={16} color="var(--accent)" />
+          <BadgeCheck size={16} color="var(--accent)" />
           <div>
             <div className="tfh-label" style={{ marginBottom: 2 }}>Project Lead</div>
             {project?.leadId ? (
@@ -5203,7 +5427,7 @@ const WorkspaceSwitcher = () => {
                 <Building2 size={13} color={w.id === current?.id ? "var(--accent)" : "var(--text-faint)"} />
                 <span style={{ flex: 1, fontSize: 12.5, fontWeight: w.id === current?.id ? 600 : 500 }}>{w.name}</span>
                 {w.role === "admin" && <Shield size={11} color="var(--stage-done)" />}
-                {w.role === "lead" && <Crown size={11} color="var(--accent)" />}
+                {w.role === "lead" && <BadgeCheck size={11} color="var(--accent)" />}
               </button>
             ))}
           </div>
@@ -5295,7 +5519,108 @@ const CreateWorkspaceScreen = () => {
 // overlapped; consolidated into just this one).
 const PROJECT_LIST_OPEN_KEY = "pmdamc.sidebar.projectsOpen";
 
-const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManage, onCreateProject, onReorder }) => {
+// One project row. Beyond selecting and drag-reordering, a manager gets
+// Rename (inline, in place — no dialog for a one-field change) and Delete
+// behind a two-step confirm, since deleting a project takes its tasks,
+// milestones and files with it.
+const ProjectRow = ({ project, active, canManage, onSelect, onRename, onDelete, dragProps, dragging }) => {
+  const [mode, setMode] = useState(null); // null | "rename" | "confirm-delete"
+  const [name, setName] = useState(project.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const inputRef = useRef(null);
+
+  useEffect(() => { setName(project.name); }, [project.name]);
+  useEffect(() => { if (mode === "rename") { inputRef.current?.focus(); inputRef.current?.select(); } }, [mode]);
+
+  const submitRename = async (e) => {
+    e?.preventDefault();
+    const next = name.trim();
+    if (!next || next === project.name) { setMode(null); setName(project.name); return; }
+    setBusy(true); setError("");
+    try {
+      await onRename(project.id, next);
+      setMode(null);
+    } catch (err) {
+      setError(err.message || "Couldn't rename.");
+      setName(project.name);
+    } finally { setBusy(false); }
+  };
+
+  const confirmDelete = async () => {
+    setBusy(true); setError("");
+    try { await onDelete(project.id); }
+    catch (err) { setError(err.message || "Couldn't delete."); setBusy(false); setMode(null); }
+  };
+
+  if (mode === "rename") {
+    return (
+      <form onSubmit={submitRename} style={{ padding: "2px 6px" }}>
+        <input
+          ref={inputRef} className="tfh-input" value={name} disabled={busy}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={submitRename}
+          onKeyDown={(e) => { if (e.key === "Escape") { setMode(null); setName(project.name); } }}
+          style={{ fontSize: 12.5, padding: "5px 8px" }}
+          aria-label={`Rename ${project.name}`}
+        />
+        {error && <div style={{ fontSize: 10.5, color: "var(--pri-high)", padding: "3px 4px" }}>{error}</div>}
+      </form>
+    );
+  }
+
+  if (mode === "confirm-delete") {
+    return (
+      <div style={{ padding: "6px 8px", borderRadius: 8, background: "var(--raised)", border: "1px solid var(--pri-high)" }}>
+        <div style={{ fontSize: 11, color: "var(--text)", marginBottom: 6, lineHeight: 1.4 }}>
+          Delete <strong>{project.name}</strong>? Its tasks, milestones and files go too.
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button className="tfh-btn tfh-btn-danger" style={{ fontSize: 11, padding: "3px 8px" }} disabled={busy} onClick={confirmDelete}>
+            {busy ? "Deleting…" : "Delete"}
+          </button>
+          <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 8px" }} disabled={busy} onClick={() => setMode(null)}>Cancel</button>
+        </div>
+        {error && <div style={{ fontSize: 10.5, color: "var(--pri-high)", marginTop: 5 }}>{error}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="tfh-project-row" style={{ display: "flex", alignItems: "center", gap: 2, opacity: dragging ? 0.5 : 1 }}>
+      <button
+        onClick={() => onSelect(project.id)}
+        {...dragProps}
+        className={`tfh-nav-item ${active ? "active" : ""}`}
+        style={{ fontSize: 12.5, padding: "7px 10px", flex: 1, minWidth: 0, cursor: canManage ? "grab" : "pointer" }}
+        title={canManage ? `${project.name} — drag to reorder` : project.name}
+      >
+        <span style={{ width: 6, height: 6, borderRadius: 999, background: project.completedAt ? "var(--accent)" : "var(--stage-progress)", flexShrink: 0 }} />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{project.name}</span>
+      </button>
+      {canManage && (
+        <div className="tfh-project-actions" style={{ display: "flex", gap: 1, flexShrink: 0 }}>
+          <button
+            className="tfh-btn tfh-btn-ghost" style={{ padding: 4 }}
+            onClick={(e) => { e.stopPropagation(); setMode("rename"); }}
+            aria-label={`Rename ${project.name}`} title="Rename"
+          >
+            <Pencil size={11} color="var(--text-faint)" />
+          </button>
+          <button
+            className="tfh-btn tfh-btn-ghost" style={{ padding: 4 }}
+            onClick={(e) => { e.stopPropagation(); setMode("confirm-delete"); }}
+            aria-label={`Delete ${project.name}`} title="Delete"
+          >
+            <Trash2 size={11} color="var(--text-faint)" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManage, onCreateProject, onReorder, onRenameProject, onDeleteProject }) => {
   // Collapsed by default — the list opens on demand (see the render below).
   // A project is almost always selected, so "open it because you're in a
   // project" would mean always open, which is the problem this solves.
@@ -5375,20 +5700,18 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
         </button>
       </div>
       {expanded && orderedActive.map((p) => (
-        <button
-          key={p.id} onClick={() => onSelectProject(p.id)}
-          draggable={canManage}
-          onDragStart={() => handleDragStart(p.id)}
-          onDragOver={(e) => handleDragOver(e, p.id)}
-          onDrop={handleDrop}
-          onDragEnd={() => { setDragId(null); }}
-          className={`tfh-nav-item ${activeFilter === p.id ? "active" : ""}`}
-          style={{ fontSize: 12.5, padding: "7px 10px", opacity: dragId === p.id ? 0.5 : 1, cursor: canManage ? "grab" : "pointer" }}
-          title={canManage ? `${p.name} — drag to reorder` : p.name}
-        >
-          <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--stage-progress)", flexShrink: 0 }} />
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
-        </button>
+        <ProjectRow
+          key={p.id} project={p} active={activeFilter === p.id} canManage={canManage}
+          onSelect={onSelectProject} onRename={onRenameProject} onDelete={onDeleteProject}
+          dragging={dragId === p.id}
+          dragProps={{
+            draggable: canManage,
+            onDragStart: () => handleDragStart(p.id),
+            onDragOver: (e) => handleDragOver(e, p.id),
+            onDrop: handleDrop,
+            onDragEnd: () => setDragId(null),
+          }}
+        />
       ))}
       {expanded && completed.length > 0 && (
         <>
@@ -5399,15 +5722,11 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
             {showCompleted ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Completed ({completed.length})
           </button>
           {showCompleted && completed.map((p) => (
-            <button
-              key={p.id} onClick={() => onSelectProject(p.id)}
-              className={`tfh-nav-item ${activeFilter === p.id ? "active" : ""}`}
-              style={{ fontSize: 12.5, padding: "7px 10px", opacity: 0.75 }}
-              title={p.name}
-            >
-              <CheckCircle2 size={12} color="var(--accent)" style={{ flexShrink: 0 }} />
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "line-through" }}>{p.name}</span>
-            </button>
+            <ProjectRow
+              key={p.id} project={p} active={activeFilter === p.id} canManage={canManage}
+              onSelect={onSelectProject} onRename={onRenameProject} onDelete={onDeleteProject}
+              dragProps={{}}
+            />
           ))}
         </>
       )}
@@ -5694,7 +6013,9 @@ function Workspace() {
   const openEditById = (id) => { const t = tasks.find((x) => x.id === id); if (t) openEdit(t); };
   const closeDialog = () => { setDraft(null); setSaveError(""); };
 
-  // "Open in Collaboration Log" from a logged-activity popup. The token
+  // Used by global search when you pick a logged activity: jump to that day
+  // in the Collaboration Log. (The dashboard's activity popup used to offer
+  // this too; that button was removed, search is now the only way in.) The token
   // makes each click a distinct focus even when the day and tab repeat, so
   // the Activity view re-points every time rather than only on the first.
   const goToActivityLog = (item) => {
@@ -5944,6 +6265,20 @@ function Workspace() {
           canManage={canManage}
           onCreateProject={createProject}
           onReorder={async (orderedIds) => { await api.reorderProjects(currentId, orderedIds); refreshProjects(); }}
+          onRenameProject={async (id, name) => { await api.renameProject(currentId, id, name); await refreshProjects(); }}
+          onDeleteProject={async (id) => {
+            await api.deleteProject(currentId, id);
+            const remaining = await refreshProjects();
+            // Deleting the project you were looking at leaves the board
+            // pointed at nothing — fall back to the all-projects view rather
+            // than a blank screen.
+            if (id === projectId || id === projectFilter) {
+              const next = (remaining || []).find((p) => p.id !== id);
+              if (next) switchProject(next.id);
+              setProjectFilter("all");
+            }
+            setTasks((prev) => prev.filter((t) => t.projectId !== id));
+          }}
           onSelectProject={(id) => {
             // Order matters: switchProject changes projectId, which fires the
             // sync effect that sets projectFilter from projectId. So switch
@@ -6026,7 +6361,6 @@ function Workspace() {
             <DashboardView
               workspaceId={currentId} tasks={tasks} users={users} currentUser={currentUser} projects={projects}
               onOpen={openEdit} hasProject={!!projectId} onCreateProject={createProject} onAssignTask={openCreateFor}
-              onGoActivityLog={goToActivityLog}
             />
           )}
           {view === "board" && (
@@ -6037,6 +6371,7 @@ function Workspace() {
               assigneeFilter={assigneeFilter} setAssigneeFilter={setAssigneeFilter}
               statusFilter={statusFilter} setStatusFilter={setStatusFilter}
               projectFilter={projectFilter} setProjectFilter={setProjectFilter}
+              workspaceId={currentId} onOpenFiles={() => setView("files")}
             />
           )}
           {view === "team" && <TeamView tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} onSetRole={setRole} onSetTitle={setTitle} onRemoveMember={removeMember} onInvite={invite} canManage={canManage} workspaceId={currentId} projects={projects} onSetProjectLead={setProjectLeadFor} />}

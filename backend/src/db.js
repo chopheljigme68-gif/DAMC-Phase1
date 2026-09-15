@@ -290,10 +290,29 @@ async function setProjectLead(projectId, leadId) {
   return getProjectById(projectId);
 }
 
-async function updateProject(projectId, { name, description, deadline, startDate }) {
+// PARTIAL update: only the keys actually present in `patch` are written.
+// It used to take all four fields and write them unconditionally, so a
+// rename-only call (which is what the sidebar's Rename does) silently blanked
+// the project's description, deadline and start date.
+async function updateProject(projectId, patch = {}) {
+  const columnMap = { name: "name", description: "description", deadline: "deadline", startDate: "start_date" };
+  const fields = [];
+  const values = [];
+  let i = 1;
+  for (const [key, col] of Object.entries(columnMap)) {
+    if (patch[key] === undefined) continue;
+    fields.push(`${col} = $${i++}`);
+    // Empty string is a meaningful "cleared" value for description, but for
+    // the two date columns it has to become NULL or Postgres rejects it.
+    const value = patch[key];
+    values.push(key === "description" ? (value || "") : (value || null));
+  }
+  if (fields.length === 0) return getProjectById(projectId);
+  values.push(projectId);
+
   const { rows } = await pool.query(
-    `UPDATE projects SET name = $2, description = $3, deadline = $4, start_date = $5 WHERE id = $1 RETURNING id`,
-    [projectId, name, description || "", deadline || null, startDate || null]
+    `UPDATE projects SET ${fields.join(", ")} WHERE id = $${i} RETURNING id`,
+    values
   );
   if (!rows[0]) return null;
   return getProjectById(projectId);

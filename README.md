@@ -6,6 +6,179 @@ A real, deployable task board with proper hierarchy: **workspaces** contain
 boundary below is enforced by the server, not just hidden in the UI, and
 was tested live before being shipped.
 
+## What's new in this round — comments bug, project management, files
+
+**The reported bug, first:**
+
+- **A member's comment never appeared for anyone else.** The API was always
+  correct — every workspace member could read every comment — but the client
+  fetched the list *once*, when the task dialog opened, and never again. So
+  if you had a task open while a colleague commented on it, you simply never
+  saw it. The server was already broadcasting each comment; the dialog now
+  listens, scoped to that task. Activity-log comments got the same treatment
+  (and the broadcast they were missing).
+
+**Plus:**
+
+- **Rename and delete any project**, from the sidebar. Rename is inline —
+  it's one field, it doesn't need a dialog. Delete takes two clicks and spells
+  out that tasks, milestones and files go with it; deleting the project you
+  were viewing falls back to All projects instead of a blank board.
+  - Fixed a latent hazard while wiring this: `PATCH /projects/:id` wrote all
+    four fields unconditionally, so a rename-only call would have silently
+    blanked the project's description, deadline and start date. It's a real
+    partial update now.
+- **Files on the Board.** Selecting a project shows its files and links in a
+  column beside its tasks, so you can see what's attached without leaving the
+  board. Hidden on "All projects", where there's no single set to show.
+- **Drag files onto the Files page to upload them** — full-page drop target
+  with the destination project named on it, so you can't drop into the wrong
+  project by accident.
+- **Team Collabs rows can be dragged** into whatever order you want. The
+  order is remembered per browser: who you want at the top of your dashboard
+  is your own arrangement, not a fact about the workspace, so it needs no
+  schema change and no rules about who may reorder whom. New joiners appear
+  at the end rather than scrambling your order.
+
+## Previously shipped
+## What's new in this round — icon audit
+
+- **Removed "Open in Collaboration Log"** from the dashboard's logged-activity
+  popup — the popup already shows everything the entry holds, so the jump was
+  a detour out of the dashboard for no gain. Search still routes to a logged
+  activity's day in the Collaboration Log.
+
+- **Icon pass across the app.** Three icons were imported but never used
+  (dead weight in the bundle) and several picks were semantically weak or
+  too informal for a department tool. Swapped, all within the existing
+  lucide set so the whole UI stays on one 24×24 grid at one stroke weight:
+  - Board: generic columns → an actual kanban board
+  - Collaboration Log: an open book → a notebook with a pen (it's written in,
+    not read from)
+  - Team lead marker: a crown → a verified badge (a crown reads as
+    gamification on a government system)
+  - Theme menu: a laptop → a monitor for "System", a coffee cup → a sunset
+    for "Warm"
+
+## Previously shipped
+## What's new in this round — Warm theme and Follow system
+
+- **Four theme choices instead of a two-way toggle**: System, Light, Warm,
+  Dark, from a menu on the top bar.
+  - **Warm** is a new light theme on a cream ground rather than white —
+    easier on the eyes over a long day and under warm office lighting. Its
+    status colours are shifted warm to match, not copied across from the
+    light theme, where they glared.
+  - **System** follows the device and re-paints live when the OS switches at
+    sunset, without a reload. The menu says which way it's currently
+    resolving ("System · dark now") so it isn't a guess.
+  - The choice is remembered per browser, and the button always shows the
+    theme actually on screen.
+
+## Previously shipped
+## What's new in this round — dates, time ranges, and a chip removed
+
+- **Every date now reads dd/mm/yyyy.** A native date input renders in the
+  browser's own locale, so the same field was showing `09/15/2026` to some
+  people and `15/09/2026` to others with no way to control it from the
+  markup — genuinely risky for a day-first office. All eleven date inputs
+  now use one `DateField` component: it displays and accepts dd/mm/yyyy,
+  tolerates `5/9/26` and `5-9-2026`, rejects impossible dates like 31/02,
+  and keeps the calendar picker behind a button so nobody loses it on
+  desktop or mobile.
+- **Activities can run from one time to another.** "Time from" and "Time to"
+  on the task dialog, replacing the single Time field — people had been
+  writing "2–4 PM" into titles for want of an end time. Shows as
+  `2:00 PM – 4:30 PM` everywhere a time appears. The end field stays
+  disabled until there's a start, and an end that isn't after the start is
+  refused by the server as well as flagged in the form. Recurring activities
+  inherit the whole range.
+- **The "Logged" chip is gone** from every row it appeared on.
+
+## Previously shipped
+## What's new in this round — completion tick in the task dialog
+
+- **Stage is now a tick beside the footer buttons.** It was a "Tasks /
+  Completed" dropdown sitting mid-form among the filing fields, which is an
+  odd shape for a two-state value and an odd place for it — marking
+  something done is the last thing you do before saving, not something you
+  set alongside the project. It's now a single **Mark complete / Completed**
+  toggle in the footer, left of Cancel, using the same tick control as the
+  urgent toggle. Priority takes the full row it used to share.
+
+## Previously shipped
+## What's new in this round — files by project
+
+- **A project picker in the Files view.** Files and links are stored per
+  project, but the view could only ever show whichever project was selected
+  in the sidebar — so getting at another project's documents meant leaving
+  the page, switching project, and coming back. There's now a dropdown in
+  the Files header: pick a project and its files and links load in place,
+  without changing what the rest of the app is pointed at. Completed
+  projects stay in the list, since their files are often exactly what
+  someone is looking for.
+  - Permission is computed for the project you've **picked**, not the one in
+    the sidebar — otherwise the Upload button would appear on a project you
+    don't lead and the server would then reject the upload. A member viewing
+    a project they don't lead now gets an explicit "View only" line rather
+    than silently missing controls.
+  - The picker still follows the sidebar: switching project there and then
+    opening Files shows that project.
+
+## Previously shipped
+## What's new in this round — workspace rename
+
+- **The workspace can now be renamed from inside the app.** Admin Panel →
+  **Workspace** → edit the name → Save. It updates the sidebar wordmark and
+  every screen for everyone in the workspace immediately.
+
+  This existed nowhere before: no route, no API method, no UI. The name was
+  set once at creation and could only be changed by editing the database
+  directly, which is why "MIRD – DAMC" couldn't be shortened to "DAMC" from
+  the product. Admin-only, matching every other workspace-level setting, and
+  enforced server-side (`PATCH /workspaces/:id`, `requireRole("admin")`) not
+  just hidden in the UI. The slug is deliberately left untouched — it's an
+  identifier other rows hang off, and nothing user-facing shows it.
+
+## Previously shipped
+## What's new in this round — correction log #8
+
+Two reported bugs, both real, both fixed with a regression test:
+
+- **A repeating activity could not be removed.** Deleting one occurrence did
+  nothing lasting: the hourly generator saw a gap in the series and put the
+  task straight back, so "Meeting on Pork supply to GMC 108 Project" kept
+  reappearing daily. Deleting an occurrence now records that date as an
+  exception on the series (`tasks.recurrence_exdates`) and generation skips
+  it permanently. Separately, **"Stop repeating" now works from any
+  occurrence** — previously the schedule could only be changed from the first
+  activity in the series, which is useless when you don't know which one that
+  is. The task dialog shows a Stop repeating button on every occurrence, with
+  an explicit "will stop when you save" confirmation. Stopping a series never
+  deletes the original activity, and never touches occurrences someone has
+  already worked on.
+- **An activity added for the 24th never appeared under Upcoming Collabs.**
+  The card took the first 6 rows and silently dropped the rest — with
+  recurring activities in the mix, anything more than a few days out fell off
+  the end and looked like it hadn't saved. The card now shows every upcoming
+  activity with a count and its own scroll area.
+
+Plus, as requested:
+
+- **Search, top right.** Type part of an activity's name and matching
+  activities appear as you type — both tasks and logged activity, ranked so
+  the closest names come first, each showing its project or Logged badge,
+  date and owner. Tasks are matched from memory so typing stays instant;
+  logged activity is fetched once (90 days) on the first search. Arrow keys
+  and Enter work, and Ctrl/Cmd+K focuses it from anywhere.
+- **Files accepts pasted links.** Google Drive files and folders, Sheets, or
+  any other URL now sit alongside uploads in the Files view, using the same
+  project-links API already behind milestone links rather than a second
+  mechanism.
+- **Supervisor comments under a Team Collabs row read in red**, with a red
+  rule down the side — they're feedback to act on, not more grey body text.
+
+## Previously shipped
 ## What's new in this round — correction log #7
 
 - **The account block moved to the top right, as a proper menu.** It used

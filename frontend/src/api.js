@@ -66,6 +66,7 @@ export const api = {
   setProjectComplete: (workspaceId, projectId, complete) => request(`/workspaces/${workspaceId}/projects/${projectId}/complete`, { method: "PATCH", body: { complete } }),
   setProjectLead: (workspaceId, projectId, leadId) => request(`/workspaces/${workspaceId}/projects/${projectId}/lead`, { method: "PATCH", body: { leadId } }),
   updateProject: (workspaceId, projectId, payload) => request(`/workspaces/${workspaceId}/projects/${projectId}`, { method: "PATCH", body: payload }),
+  renameProject: (workspaceId, projectId, name) => request(`/workspaces/${workspaceId}/projects/${projectId}`, { method: "PATCH", body: { name } }),
 
   getMilestoneAttachments: (workspaceId, projectId, milestoneId) =>
     request(`/workspaces/${workspaceId}/projects/${projectId}/milestones/${milestoneId}/attachments`),

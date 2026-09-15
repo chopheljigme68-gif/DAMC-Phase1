@@ -184,6 +184,28 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 .tfh-task-card { transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease; }
 .tfh-task-card:hover { transform: translateY(-2px); border-color: var(--text-faint); box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.5); }
 
+/* Drop overlay for the Files page. Covers the whole view while a drag is in
+   progress so the target is unmissable, and is pointer-events:none so it
+   can't itself swallow the drop event it's advertising. */
+.tfh-dropzone {
+  position: absolute; inset: 0; z-index: 20; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  border: 2px dashed var(--accent); border-radius: 16px;
+  background: var(--accent-soft);
+  backdrop-filter: blur(1px);
+  animation: tfhFade 0.12s ease both;
+}
+
+/* Rename/delete actions on a sidebar project — kept out of the way until
+   you're on the row, so the sidebar stays a list of projects rather than a
+   list of buttons. Always visible on touch, where there's no hover. */
+.tfh-project-actions { opacity: 0; transition: opacity 0.12s ease; }
+.tfh-project-row:hover .tfh-project-actions,
+.tfh-project-row:focus-within .tfh-project-actions { opacity: 1; }
+@media (hover: none) {
+  .tfh-project-actions { opacity: 1; }
+}
+
 /* Global search in the top bar. Sized to sit between the date and the
    action buttons without crowding either. */
 .tfh-search-wrap {

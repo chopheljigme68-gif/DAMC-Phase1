@@ -43,4 +43,14 @@ function broadcastProjectsChanged(workspaceId) {
   }
 }
 
-module.exports = { notify, broadcastTaskChange, broadcastLeadChange, broadcastMemberAdded, broadcastProjectsChanged };
+// A comment on someone's activity-log entry. Scoped by log id so an open
+// entry can refresh just itself, the same way task comments do.
+function broadcastActivityComment(workspaceId, logId) {
+  try {
+    getIO().to(`workspace:${workspaceId}`).emit("activity:comment", { workspaceId, logId });
+  } catch (err) {
+    console.error("activity:comment broadcast failed:", err.message);
+  }
+}
+
+module.exports = { notify, broadcastTaskChange, broadcastLeadChange, broadcastMemberAdded, broadcastProjectsChanged, broadcastActivityComment };

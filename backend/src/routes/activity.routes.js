@@ -8,7 +8,7 @@ const {
 const { authenticate } = require("../auth");
 const { requireWorkspaceMember } = require("../middleware/workspace");
 const { activityLogUpload } = require("../utils/upload");
-const { notify } = require("../utils/notify");
+const { notify, broadcastActivityComment } = require("../utils/notify");
 
 const router = express.Router({ mergeParams: true });
 router.use(authenticate, requireWorkspaceMember);
@@ -214,6 +214,7 @@ router.post("/entry/:logId/comments", async (req, res, next) => {
         workspaceId: req.params.workspaceId, message: `${req.user.name} commented on your activity log for ${log.entryDate}`,
       });
     }
+    broadcastActivityComment(req.params.workspaceId, log.id);
     res.status(201).json({ comment });
   } catch (err) { next(err); }
 });
