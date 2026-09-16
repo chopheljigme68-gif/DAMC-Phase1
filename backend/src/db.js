@@ -1333,6 +1333,20 @@ async function upsertActivityLog({ userId, workspaceId, entryDate, content }) {
   return rows[0];
 }
 
+// getActivityLogById deliberately omits `content` (it's used for ownership
+// checks on hot paths). Anything that needs to READ or REWRITE the blocks
+// wants this one instead — reaching for the other and finding content
+// undefined is an easy and silent mistake.
+async function getActivityLogWithContent(id) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id AS "userId", workspace_id AS "workspaceId",
+            to_char(entry_date, 'YYYY-MM-DD') AS "entryDate", content
+     FROM activity_logs WHERE id = $1`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
 async function getActivityLogById(id) {
   const { rows } = await pool.query(
     `SELECT id, user_id AS "userId", workspace_id AS "workspaceId", to_char(entry_date, 'YYYY-MM-DD') AS "entryDate"
@@ -1469,7 +1483,7 @@ module.exports = {
   getLinksForProject, addProjectLink, getProjectLinkById, deleteProjectLink,
   getDocumentsForProject, getDocumentById, addDocument, deleteDocument,
   getHolidays, addHoliday, deleteHoliday, getHolidayById,
-  getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog, getActivityLogById, getActivityLogByDate,
+  getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog, getActivityLogById, getActivityLogWithContent, getActivityLogByDate,
   getCommentsForActivityLog, addActivityLogComment, getActivityLogCommentById, deleteActivityLogComment,
   getAttachmentsForActivityLog, getActivityLogAttachmentById, addActivityLogAttachment, deleteActivityLogAttachment,
   getTasksDueInTwoDays, markDueReminderSent,

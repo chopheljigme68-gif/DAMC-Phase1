@@ -2,19 +2,21 @@ const express = require("express");
 const fs = require("fs");
 const {
   getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog, getActivityLogByDate, getActivityLogById,
+  getActivityLogWithContent,
   getCommentsForActivityLog, addActivityLogComment, getActivityLogCommentById, deleteActivityLogComment,
   getAttachmentsForActivityLog, getActivityLogAttachmentById, addActivityLogAttachment, deleteActivityLogAttachment,
 } = require("../db");
 const { authenticate } = require("../auth");
 const { requireWorkspaceMember } = require("../middleware/workspace");
 const { activityLogUpload } = require("../utils/upload");
-const { notify, broadcastActivityComment } = require("../utils/notify");
+const { notify, broadcastActivityComment, broadcastActivityChanged } = require("../utils/notify");
 
 const router = express.Router({ mergeParams: true });
 router.use(authenticate, requireWorkspaceMember);
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}$/;
+const BLOCK_STATUSES = ["done", "pending"];
 
 // A content block is either {type:"text", text, time?, links?} or
 // {type:"table", rows: [[...]]}. Kept intentionally loose (validated shape,
@@ -44,6 +46,12 @@ function validateContent(content) {
       }
       if (block.notes !== undefined && block.notes !== null && (typeof block.notes !== "string" || block.notes.length > 4000)) {
         return "A text block's notes are invalid or too long";
+      }
+      // Whether the logged activity is finished. Optional: entries written
+      // before this existed simply have no status, and are treated as
+      // pending without being retro-labelled.
+      if (block.status !== undefined && block.status !== null && !BLOCK_STATUSES.includes(block.status)) {
+        return "A text block's status must be 'done' or 'pending'";
       }
     } else if (block.type === "table") {
       if (!Array.isArray(block.rows) || block.rows.length > 200) return "A table block has too many rows or is invalid";
@@ -109,6 +117,46 @@ router.put("/:date", async (req, res, next) => {
     const log = await upsertActivityLog({
       userId: req.user.id, workspaceId: req.params.workspaceId, entryDate: req.params.date, content,
     });
+    res.json({ log });
+  } catch (err) { next(err); }
+});
+
+// Mark a single logged activity complete or pending.
+//
+// A dedicated endpoint rather than making the client re-PUT the whole day:
+// the client would have to read the entry, mutate one block and write it all
+// back, which is a read-modify-write race that can lose a concurrent edit
+// from another tab. Here the read and the write happen together, server-side,
+// and only the one block changes.
+//
+// Always scoped to the CALLER's own entry — nobody marks off someone else's
+// activity, the same rule the rest of this file follows.
+router.patch("/:date/blocks/:index/status", async (req, res, next) => {
+  try {
+    if (!DATE_RE.test(req.params.date)) return res.status(400).json({ error: "Invalid date" });
+    const index = Number(req.params.index);
+    if (!Number.isInteger(index) || index < 0) return res.status(400).json({ error: "Invalid activity index" });
+
+    const { status } = req.body || {};
+    // null clears it back to "not marked either way".
+    if (status !== null && !BLOCK_STATUSES.includes(status)) {
+      return res.status(400).json({ error: "Status must be 'done', 'pending', or null" });
+    }
+
+    const existing = await getActivityLogByDate(req.user.id, req.params.workspaceId, req.params.date);
+    if (!existing) return res.status(404).json({ error: "No log entry for that date" });
+
+    const full = await getActivityLogWithContent(existing.id);
+    const content = Array.isArray(full?.content) ? [...full.content] : [];
+    const block = content[index];
+    if (!block || block.type !== "text") return res.status(404).json({ error: "That activity is no longer there — reload and try again" });
+
+    content[index] = status === null ? { ...block, status: undefined } : { ...block, status };
+
+    const log = await upsertActivityLog({
+      userId: req.user.id, workspaceId: req.params.workspaceId, entryDate: req.params.date, content,
+    });
+    broadcastActivityChanged(req.params.workspaceId, log.id);
     res.json({ log });
   } catch (err) { next(err); }
 });

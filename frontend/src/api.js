@@ -119,6 +119,8 @@ export const api = {
 
   getActivityLogAttachments: (workspaceId, date) => request(`/workspaces/${workspaceId}/activity-log/${date}/attachments`),
 
+  setActivityBlockStatus: (workspaceId, date, index, status) =>
+    request(`/workspaces/${workspaceId}/activity-log/${date}/blocks/${index}/status`, { method: "PATCH", body: { status } }),
   getActivityLogComments: (workspaceId, logId) => request(`/workspaces/${workspaceId}/activity-log/entry/${logId}/comments`),
   addActivityLogComment: (workspaceId, logId, body) => request(`/workspaces/${workspaceId}/activity-log/entry/${logId}/comments`, { method: "POST", body: { body } }),
   deleteActivityLogComment: (workspaceId, logId, commentId) => request(`/workspaces/${workspaceId}/activity-log/entry/${logId}/comments/${commentId}`, { method: "DELETE" }),

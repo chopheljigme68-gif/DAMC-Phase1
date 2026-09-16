@@ -6,6 +6,28 @@ A real, deployable task board with proper hierarchy: **workspaces** contain
 boundary below is enforced by the server, not just hidden in the UI, and
 was tested live before being shipped.
 
+## What's new in this round — mark logged activities complete or pending
+
+- **Every activity in the Collaboration Log can be marked Complete or
+  Pending**, and the same control sits in the dashboard's logged-activity
+  popup, beside Close. Completed activities read struck-through with a green
+  chip; pending ones carry an amber chip, on the Log and on the dashboard
+  alike.
+  - Two explicit buttons rather than one cycling toggle: "mark it complete"
+    and "mark it pending" are different intentions, and a tri-state toggle
+    makes you click through a state you didn't want. Clicking the state it's
+    already in clears it.
+  - Only the person who logged an activity can mark it off — enforced
+    server-side, and the UI shows a read-only chip rather than a dead control
+    on someone else's entry.
+  - Status is optional: activities logged before this existed simply have no
+    status rather than being retro-labelled as pending.
+  - Marking off goes through a dedicated endpoint that changes just that one
+    activity, instead of the client re-saving the whole day's entry — which
+    would be a read-modify-write race that can lose a concurrent edit from
+    another tab.
+
+## Previously shipped
 ## What's new in this round — comments bug, project management, files
 
 **The reported bug, first:**

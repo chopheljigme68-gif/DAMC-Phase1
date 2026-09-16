@@ -96,8 +96,72 @@ the due-soon reminder sweep all handle them with zero changes.
 - Deleting a series head calls `promoteNextSeriesHead` FIRST, because
   `recurrence_parent_id` cascades — without the promotion, deleting the
   first activity would take the whole series with it.
-- `PATCH` with a `recurrence` on a non-head task is rejected (400) on
-  purpose: "which task owns the rule" must stay unambiguous.
+- **Exception dates are what make deletion stick.** `tasks.recurrence_exdates`
+  (DATE[], on the head) lists dates the generator must never recreate.
+  Deleting an occurrence records its date there. Without this the sweep saw
+  a "missing" date in the series and refilled it, so a deleted activity came
+  straight back and the whole series looked impossible to remove — a real
+  bug reported from production. Never generate without filtering `exDates`,
+  and carry the array across in `promoteNextSeriesHead`.
+- `PATCH` with a `recurrence` OBJECT on a non-head task is rejected (400):
+  a schedule needs the series' own start date as its anchor. But
+  `recurrence: null` from an occurrence IS accepted and stops the series via
+  its head — "Stop repeating" has to work from whichever occurrence the user
+  happens to be looking at, because they don't know which one is first.
+
+## Dates are always dd/mm/yyyy — never use a bare `<input type="date">`
+
+A native date input renders in the BROWSER's locale, so the same field shows
+`09/15/2026` to one person and `15/09/2026` to another and the markup can't
+control it. This office reads day-first, and the US order was a real source
+of misreading. Every date input in the app therefore uses the `DateField`
+component in `App.jsx`: a text input we format ourselves (always
+dd/mm/yyyy, tolerant of `5/9/26` and `5-9-2026` on input, rejects
+impossible dates like 31/02), plus a calendar button that opens the native
+picker via `showPicker()` with a `.click()` fallback. The native input is
+still in the DOM but is 1px and transparent — it drives the picker and
+never renders the value.
+
+If you add a date field, use `DateField`. A raw `type="date"` will silently
+be US-formatted for some users. The only legitimate `type="date"` in the
+codebase is the hidden one inside `DateField` itself.
+
+## Tasks have a time RANGE
+
+`due_time` is the START time and `end_time` is the optional end — added
+after people took to writing "2–4 PM" into activity titles. Render both
+through `formatTimeRange(start, end)` so every surface shows a range
+identically. An end time with no start, or one that isn't strictly after
+the start, is rejected server-side in `tasks.routes.js` (`validateTimeRange`),
+and the PATCH path validates the range as it will BE after the patch —
+changing only the start can invalidate an end time that's already stored.
+Recurring occurrences inherit both times; `generateForTask` builds its head
+object by hand, so any new task field has to be added there too or it
+silently won't be copied onto occurrences.
+
+## Activity-log blocks: two getters, only one has `content`
+
+`getActivityLogById` deliberately selects everything EXCEPT `content` (it's
+used for ownership checks). Anything that reads or rewrites the blocks must
+use `getActivityLogWithContent` — reaching for the wrong one gives you
+`content === undefined` and a confusing "that activity is no longer there"
+rather than a crash. Hit during the complete/pending work.
+
+Block status (`block.status`: "done" | "pending" | absent) is changed through
+`PATCH /activity-log/:date/blocks/:index/status`, which mutates one block
+server-side. Don't replace it with a client-side read-modify-write of the
+whole entry — that races with a concurrent edit in another tab.
+
+## Live data: fetch-once lists are a bug waiting to happen
+
+`broadcastTaskChange` already fires on every task change including comments,
+and the workspace socket room reaches everyone. Any list that renders
+other people's contributions must SUBSCRIBE, not just fetch on mount — task
+comments shipped fetch-once and produced a "member comments are invisible to
+everyone else" report that looked like a permissions bug and wasn't. The
+pattern to copy is in `Comments`: `socket.on("task:changed", …)` filtered by
+`reason` and `taskId`, cleaned up on unmount. `ActivityComments` does the
+same with `activity:comment`.
 
 ## The "stage now, upload after save" pattern
 
@@ -160,6 +224,16 @@ from the department's real logo, background removed). The color palette
 green (`#2FA34F` dark theme / `#1F7D3B` light theme) — priority/status
 colors (red/amber/blue/teal) were kept deliberately distinct from the brand
 accent for readability, don't collapse them into the same green.
+
+**Three themes, four choices.** `data-theme` is `dark`, `light` or `warm`;
+the user's stored *preference* adds `system`, which resolves via
+`prefers-color-scheme` and re-resolves when the OS flips. Preference and
+painted theme are separate values in `ThemeContext` on purpose — collapsing
+them loses the user's choice the moment the OS changes. Warm is a light
+scheme on a cream ground: its status colours are shifted warm (deeper red,
+ochre amber) rather than copied from the light theme, which glares against
+cream. Any new colour needs a value in all three blocks, or that theme
+silently falls back to whatever was last set.
 
 ## Deploy checklist reminder
 

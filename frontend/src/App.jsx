@@ -96,6 +96,63 @@ const formatTimeRange = (start, end) => {
   return end ? `${formatTimeLabel(start)} – ${formatTimeLabel(end)}` : formatTimeLabel(start);
 };
 
+/* ------------------------------------------------------------------ */
+/* Logged-activity status — complete or pending                         */
+/* ------------------------------------------------------------------ */
+// A logged activity is a text block inside someone's day entry, so its
+// status lives on the block (`block.status`). Absent means "not marked
+// either way": entries written before this feature existed are left alone
+// rather than retro-labelled as pending.
+const ACTIVITY_STATUS = {
+  done: { label: "Complete", color: "var(--stage-done)", icon: CheckCircle2 },
+  pending: { label: "Pending", color: "var(--pri-medium)", icon: Clock },
+};
+
+const ActivityStatusChip = ({ status, size = 9.5 }) => {
+  const meta = ACTIVITY_STATUS[status];
+  if (!meta) return null;
+  const Icon = meta.icon;
+  return (
+    <span className="tfh-chip" style={{ fontSize: size, background: "var(--raised)", color: meta.color }}>
+      <Icon size={size + 1} /> {meta.label}
+    </span>
+  );
+};
+
+// The control itself. Two explicit buttons rather than one cycling toggle —
+// "mark it complete" and "mark it pending" are different intentions, and a
+// tri-state toggle makes you click through a state you didn't want. Clicking
+// the state it's already in clears it.
+const ActivityStatusPicker = ({ status, disabled, busy, onChange, compact }) => (
+  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+    {Object.entries(ACTIVITY_STATUS).map(([key, meta]) => {
+      const active = status === key;
+      const Icon = meta.icon;
+      return (
+        <button
+          key={key} type="button" disabled={disabled || busy}
+          onClick={() => onChange(active ? null : key)}
+          className="tfh-btn"
+          aria-pressed={active}
+          title={disabled ? "Only the person who logged this can mark it" : active ? `Clear "${meta.label}"` : `Mark as ${meta.label}`}
+          style={{
+            fontSize: compact ? 10.5 : 11.5,
+            padding: compact ? "2px 7px" : "4px 9px",
+            gap: 5,
+            background: active ? "var(--raised)" : "transparent",
+            borderColor: active ? meta.color : "var(--line)",
+            color: active ? meta.color : "var(--text-dim)",
+            fontWeight: active ? 600 : 500,
+            opacity: disabled ? 0.55 : 1,
+          }}
+        >
+          <Icon size={compact ? 10 : 12} /> {meta.label}
+        </button>
+      );
+    })}
+  </div>
+);
+
 const MAX_FILE_MB = 20;
 const validateFiles = (fileList) => {
   const files = Array.from(fileList || []);
@@ -2247,6 +2304,7 @@ const activityItemsFrom = (logEntry, author) =>
       time: block.time || null,
       label: block.text,
       kind: "activity",
+      status: block.status,
       block,
       blockIndex,
       logId: logEntry.id,
@@ -2321,8 +2379,17 @@ const AgendaRow = ({ item, onOpen, onOpenActivity }) => {
         {item.time ? formatTimeRange(item.time, item.endTime) : item.dateLabel || "Anytime"}
       </span>
       <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12.5, color: item.kind === "task" && item.task.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{item.label}</span>
+        <span
+          style={{
+            fontSize: 12.5,
+            color: (item.kind === "task" && item.task.status === "done") || item.status === "done" ? "var(--text-dim)" : "var(--text)",
+            textDecoration: item.status === "done" ? "line-through" : "none",
+          }}
+        >
+          {item.label}
+        </span>
         {item.kind === "task" && <PriorityChip level={item.task.priority} />}
+        {item.kind === "activity" && <ActivityStatusChip status={item.status} />}
         {/* An activity carrying extra detail advertises it, so it's obvious
             there's something behind the click rather than a dead row. */}
         {item.kind === "activity" && (item.block?.notes || (item.block?.links || []).length > 0) && (
@@ -2360,9 +2427,27 @@ const AgendaRow = ({ item, onOpen, onOpenActivity }) => {
 // inside someone's day entry. This shows everything that block holds (time,
 // what was worked on, notes, project, links) plus who logged it and when,
 // read-only, with a way through to the full Collaboration Log entry.
-const ActivityDetailModal = ({ item, projects, onClose }) => {
+const ActivityDetailModal = ({ item, projects, onClose, currentUserId, onSetStatus }) => {
   const block = item.block || {};
   const links = block.links || [];
+  const [status, setStatus] = useState(block.status || null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  // Only the person whose log this is can mark it off — the server enforces
+  // the same rule, this just doesn't offer what would be refused.
+  const isMine = item.author?.id && item.author.id === currentUserId;
+
+  const changeStatus = async (next) => {
+    setBusy(true); setError("");
+    try {
+      await onSetStatus(item, next);
+      setStatus(next);
+    } catch (err) {
+      setError(err.message || "Couldn't update that.");
+    } finally {
+      setBusy(false);
+    }
+  };
   const projectName = projects?.find((p) => p.id === block.projectId)?.name;
   const dayLabel = item.entryDate
     ? new Date(`${item.entryDate}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
@@ -2429,9 +2514,17 @@ const ActivityDetailModal = ({ item, projects, onClose }) => {
           </>
         )}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+          {isMine ? (
+            <ActivityStatusPicker status={status} busy={busy} onChange={changeStatus} />
+          ) : status ? (
+            <ActivityStatusChip status={status} size={11} />
+          ) : (
+            <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Only {item.author?.name || "the owner"} can mark this off</span>
+          )}
           <button className="tfh-btn tfh-btn-accent" onClick={onClose}>Close</button>
         </div>
+        {error && <div style={{ fontSize: 12, color: "var(--pri-high)", marginTop: 8, textAlign: "right" }}>{error}</div>}
       </div>
     </div>
   );
@@ -2991,7 +3084,14 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
         <ActivityDetailModal
           item={activityDetail}
           projects={projects}
+          currentUserId={currentUser?.id}
           onClose={() => setActivityDetail(null)}
+          onSetStatus={async (hit, next) => {
+            const { log } = await api.setActivityBlockStatus(workspaceId, hit.entryDate, hit.blockIndex, next);
+            const merge = (rows) => rows.map((l) => (l.id === log.id ? { ...l, content: log.content } : l));
+            setMyLogs(merge);
+            setTeamLogs(merge);
+          }}
         />
       )}
     </div>
@@ -3785,7 +3885,7 @@ const TextBlockLinks = ({ links, onChange, readOnly }) => {
   );
 };
 
-const BlockEditor = ({ content, setContent, readOnly, projects }) => {
+const BlockEditor = ({ content, setContent, readOnly, projects, onSetStatus, canSetStatus, statusBusyIndex }) => {
   const updateBlock = (i, next) => setContent((prev) => prev.map((b, idx) => (idx === i ? next : b)));
   const removeBlock = (i) => setContent((prev) => prev.filter((_, idx) => idx !== i));
   const addText = () => setContent((prev) => [...prev, { type: "text", text: "", time: "", links: [], projectId: "", notes: "" }]);
@@ -3802,10 +3902,25 @@ const BlockEditor = ({ content, setContent, readOnly, projects }) => {
                 <div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
                     {block.time && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(block.time)}</span>}
-                    {block.text && <div style={{ fontSize: 13, color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{block.text}</div>}
+                    {block.text && (
+                      <div style={{ fontSize: 13, color: block.status === "done" ? "var(--text-dim)" : "var(--text)", textDecoration: block.status === "done" ? "line-through" : "none", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+                        {block.text}
+                      </div>
+                    )}
+                    <ActivityStatusChip status={block.status} />
                     {block.projectId && projectName(block.projectId) && (
                       <span className="tfh-chip" style={{ fontSize: 10, background: "var(--raised)", color: "var(--text-faint)" }}>
                         <FolderKanban size={9} /> {projectName(block.projectId)}
+                      </span>
+                    )}
+                    {/* Marking off happens on someone's OWN entry, so this
+                        only appears when the viewer owns the log. */}
+                    {canSetStatus && onSetStatus && (
+                      <span style={{ marginLeft: "auto" }}>
+                        <ActivityStatusPicker
+                          compact status={block.status} busy={statusBusyIndex === i}
+                          onChange={(next) => onSetStatus(i, next)}
+                        />
                       </span>
                     )}
                   </div>
@@ -3845,6 +3960,15 @@ const BlockEditor = ({ content, setContent, readOnly, projects }) => {
                   {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
                 <TextBlockLinks links={block.links || []} onChange={(links) => updateBlock(i, { ...block, links })} />
+                {/* In edit mode the status is just another field on the draft
+                    — it saves with the rest of the entry, no separate call. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                  <span style={{ fontSize: 11, color: "var(--text-faint)" }}>Status</span>
+                  <ActivityStatusPicker
+                    compact status={block.status}
+                    onChange={(next) => updateBlock(i, { ...block, status: next || undefined })}
+                  />
+                </div>
               </div>
             )
           ) : (
@@ -3997,6 +4121,23 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects, focus 
   const [fileError, setFileError] = useState("");
   const [activitySearch, setActivitySearch] = useState("");
   const [popupActivity, setPopupActivity] = useState(null); // {time, text, notes, projectId, links} while adding via popup
+  const [statusBusy, setStatusBusy] = useState(null); // {logId, index} while a mark-off is in flight
+
+  // Marking an activity complete/pending on the Team tab. Goes through the
+  // dedicated endpoint so only that one block changes — see the route for
+  // why this isn't a whole-entry re-PUT.
+  const setTeamBlockStatus = async (log, index, next) => {
+    setStatusBusy({ logId: log.id, index });
+    try {
+      const { log: updated } = await api.setActivityBlockStatus(workspaceId, log.entryDate, index, next);
+      setTeamLogs((prev) => prev.map((l) => (l.id === updated.id ? { ...l, content: updated.content } : l)));
+      // Keep my own copy in step — the same entry is rendered on the Mine tab.
+      setMyLogs((prev) => prev.map((l) => (l.id === updated.id ? { ...l, content: updated.content } : l)));
+      if (updated.entryDate === selectedDate) setContent(updated.content);
+    } finally {
+      setStatusBusy(null);
+    }
+  };
 
   const loadMine = async () => {
     setLoading(true);
@@ -4225,7 +4366,12 @@ const ActivityLogView = ({ workspaceId, currentUser, canManage, projects, focus 
                         <Avatar member={{ name: l.userName, color: l.userColor, initials: l.userInitials }} size={22} />
                         <span style={{ fontSize: 13, fontWeight: 600 }}>{l.userName}</span>
                       </div>
-                      <BlockEditor content={l.content} setContent={() => {}} readOnly projects={projects} />
+                      <BlockEditor
+                        content={l.content} setContent={() => {}} readOnly projects={projects}
+                        canSetStatus={l.userId === currentUser?.id}
+                        statusBusyIndex={statusBusy?.logId === l.id ? statusBusy.index : null}
+                        onSetStatus={(index, next) => setTeamBlockStatus(l, index, next)}
+                      />
                       <ActivityComments workspaceId={workspaceId} logId={l.id} currentUser={currentUser} initialCount={l.commentCount} />
                     </div>
                   ))}

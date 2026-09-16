@@ -53,4 +53,14 @@ function broadcastActivityComment(workspaceId, logId) {
   }
 }
 
-module.exports = { notify, broadcastTaskChange, broadcastLeadChange, broadcastMemberAdded, broadcastProjectsChanged, broadcastActivityComment };
+// An activity-log entry itself changed (e.g. an activity marked complete),
+// so anything showing it can refresh.
+function broadcastActivityChanged(workspaceId, logId) {
+  try {
+    getIO().to(`workspace:${workspaceId}`).emit("activity:changed", { workspaceId, logId });
+  } catch (err) {
+    console.error("activity:changed broadcast failed:", err.message);
+  }
+}
+
+module.exports = { notify, broadcastTaskChange, broadcastLeadChange, broadcastMemberAdded, broadcastProjectsChanged, broadcastActivityComment, broadcastActivityChanged };
