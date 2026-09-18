@@ -576,7 +576,7 @@ async function deleteMilestoneAttachment(id) {
 
 const TASK_SELECT = `
   SELECT
-    t.id, t.title, t.description, t.status, t.priority,
+    t.id, t.title, t.description, t.meeting_notes AS "meetingNotes", t.status, t.priority,
     t.assignee_id AS "assigneeId", t.created_by AS "createdBy",
     t.workspace_id AS "workspaceId", t.project_id AS "projectId", MAX(p.name) AS "projectName",
     to_char(t.due, 'YYYY-MM-DD') AS due,
@@ -640,11 +640,11 @@ async function createTask(data) {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `INSERT INTO tasks (title, description, status, priority, assignee_id, created_by, due, due_time, end_time, workspace_id, project_id, recurrence, recurrence_parent_id, completed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CASE WHEN $3 = 'done' THEN now() ELSE NULL END)
+      `INSERT INTO tasks (title, description, meeting_notes, status, priority, assignee_id, created_by, due, due_time, end_time, workspace_id, project_id, recurrence, recurrence_parent_id, completed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CASE WHEN $4 = 'done' THEN now() ELSE NULL END)
        RETURNING id`,
       [
-        data.title, data.description || "", data.status || "todo", data.priority || "medium",
+        data.title, data.description || "", data.meetingNotes || "", data.status || "todo", data.priority || "medium",
         data.assigneeId, data.createdBy || null, data.due || null, data.dueTime || null, data.endTime || null,
         data.workspaceId, data.projectId,
         data.recurrence ? JSON.stringify(data.recurrence) : null, data.recurrenceParentId || null,
@@ -685,7 +685,7 @@ async function updateTask(id, patch) {
   const fields = [];
   const values = [];
   let i = 1;
-  const columnMap = { title: "title", description: "description", status: "status", priority: "priority", assigneeId: "assignee_id", due: "due", dueTime: "due_time", endTime: "end_time", projectId: "project_id" };
+  const columnMap = { title: "title", description: "description", meetingNotes: "meeting_notes", status: "status", priority: "priority", assigneeId: "assignee_id", due: "due", dueTime: "due_time", endTime: "end_time", projectId: "project_id" };
   for (const [key, col] of Object.entries(columnMap)) {
     if (patch[key] !== undefined) {
       fields.push(`${col} = $${i++}`);
@@ -1103,6 +1103,7 @@ async function addComment({ taskId, userId, body }) {
 const DOCUMENT_SELECT = `
   SELECT d.id, d.project_id AS "projectId", d.uploaded_by AS "uploadedBy", d.file_name AS "fileName",
          d.mime_type AS "mimeType", d.size_bytes AS "sizeBytes", d.created_at AS "createdAt",
+         d.storage_path AS "storagePath",
          u.name AS "uploaderName"
   FROM project_documents d
   LEFT JOIN users u ON u.id = d.uploaded_by

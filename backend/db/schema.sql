@@ -642,3 +642,10 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_exdates DATE[] NOT NULL DE
 -- and forcing an end time on those would be noise. Subtasks already had
 -- start_time/end_time — this brings tasks in line with them.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_time TIME;
+
+/* ---------------- meeting / discussion notes on a task ---------------- */
+-- Separate from `description`: description is what the activity IS, these
+-- are the minutes of what was SAID when it happened. Keeping them apart
+-- means the brief stays readable after a long meeting is written up, and
+-- the notes can be surfaced on their own.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS meeting_notes TEXT NOT NULL DEFAULT '';

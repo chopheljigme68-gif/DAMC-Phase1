@@ -94,7 +94,7 @@ router.get("/", async (req, res, next) => {
 // be opened up.
 router.post("/", async (req, res, next) => {
   try {
-    const { title, description, status, priority, assigneeId, due, dueTime, endTime, subtasks, links, recurrence } = req.body || {};
+    const { title, description, meetingNotes, status, priority, assigneeId, due, dueTime, endTime, subtasks, links, recurrence } = req.body || {};
     if (!title || !title.trim()) return res.status(400).json({ error: "Title is required" });
     if (!assigneeId) return res.status(400).json({ error: "Assignee is required" });
     if (!(await assertAssigneeIsMember(req.params.workspaceId, assigneeId))) {
@@ -110,7 +110,7 @@ router.post("/", async (req, res, next) => {
     if (rule && !due) return res.status(400).json({ error: "Pick a due date — a repeating activity repeats from its first date" });
 
     const task = await createTask({
-      title: title.trim(), description, status, priority, assigneeId, due, dueTime, endTime, subtasks, links,
+      title: title.trim(), description, meetingNotes, status, priority, assigneeId, due, dueTime, endTime, subtasks, links,
       recurrence: rule,
       createdBy: req.user.id, workspaceId: req.params.workspaceId, projectId: req.params.projectId,
     });
@@ -210,7 +210,7 @@ router.patch("/:id", async (req, res, next) => {
     }
 
     const patch = {};
-    ["title", "description", "status", "priority", "assigneeId", "due", "dueTime", "endTime"].forEach((k) => {
+    ["title", "description", "meetingNotes", "status", "priority", "assigneeId", "due", "dueTime", "endTime"].forEach((k) => {
       if (req.body[k] !== undefined) patch[k] = req.body[k];
     });
     // Validate the range as it will BE after this patch, not just what the

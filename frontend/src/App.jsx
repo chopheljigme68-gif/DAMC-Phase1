@@ -44,7 +44,6 @@ const PRIORITIES = {
 const isUrgent = (level) => level === "high";
 const NAV = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "activity", label: "Collaboration Log", icon: NotebookPen },
   { id: "board", label: "Board", icon: SquareKanban },
   { id: "files", label: "Files", icon: FolderOpen },
   { id: "milestones", label: "Milestones", icon: Flag },
@@ -499,7 +498,7 @@ const Column = ({ stage, tasks, users, onOpen, onAdd, onComplete, onReopen, canM
 /* Task dialog                                                          */
 /* ------------------------------------------------------------------ */
 const emptyDraft = (status, users, currentUserId, projectId) => ({
-  id: null, title: "", description: "", status: status || "todo", priority: "medium",
+  id: null, title: "", description: "", meetingNotes: "", status: status || "todo", priority: "medium",
   assigneeId: currentUserId || users[0]?.id || "", due: localDateStr(new Date(Date.now() + 3 * 86400000)),
   dueTime: "", endTime: "", subtasks: [], pendingLinks: [], pendingFiles: [], projectId: projectId || "",
   recurrence: null,
@@ -1495,6 +1494,21 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
         <label className="tfh-label" htmlFor="tfh-desc">Description</label>
         <textarea id="tfh-desc" disabled={!canEditFields} className="tfh-input" rows={3} placeholder="Add context so anyone on the team can pick this up" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} style={{ marginBottom: 18, resize: "vertical", opacity: canEditFields ? 1 : 0.7 }} />
 
+        {/* Minutes of what was SAID, kept separate from the description
+            (which is what the activity IS) so a long write-up doesn't bury
+            the brief. Sits above the subtasks because you fill it in after
+            the meeting, working downwards. */}
+        <label className="tfh-label" htmlFor="tfh-notes">
+          Notes from Meeting/Discussion <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(minutes, decisions, follow-ups)</span>
+        </label>
+        <textarea
+          id="tfh-notes" disabled={!canEditFields} className="tfh-input" rows={3}
+          placeholder="What was discussed, what was decided, who does what next"
+          value={draft.meetingNotes || ""}
+          onChange={(e) => setDraft({ ...draft, meetingNotes: e.target.value })}
+          style={{ marginBottom: 18, resize: "vertical", opacity: canEditFields ? 1 : 0.7 }}
+        />
+
         <label className="tfh-label">Subtasks <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>— mini tasks of their own, each with a time, description, files, and links</span></label>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
           {draft.subtasks.map((s) => (
@@ -2344,7 +2358,7 @@ const buildPastItems = (pastTasks, pastLogEntries, author) => {
 const buildUpcomingItems = (upcomingTasks, dateTone) =>
   upcomingTasks.map((t) => ({ dateStr: t.due, dateLabel: shortDate(t.due), label: t.title, kind: "task", task: t, dateTone }));
 
-const AgendaRow = ({ item, onOpen, onOpenActivity }) => {
+const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
   // Both kinds of row are clickable now: a task opens the task dialog, a
   // logged activity opens its own read-only detail (it isn't a task, so it
   // has no dialog of its own — see ActivityDetailModal).
@@ -2367,17 +2381,21 @@ const AgendaRow = ({ item, onOpen, onOpenActivity }) => {
           --text-faint grey they read as disabled rather than as the
           schedule. Clock times stay brand green, so the two never blur
           into each other. */}
-      <span
-        className="tfh-mono"
-        style={{
-          fontSize: 11.5,
-          fontWeight: item.dateLabel ? 600 : 400,
-          color: item.time ? "var(--accent)" : item.dateLabel ? (item.dateTone || "var(--date-scheduled)") : "var(--text-faint)",
-          minWidth: item.dateLabel ? 54 : 58, flexShrink: 0, marginTop: 1,
-        }}
-      >
-        {item.time ? formatTimeRange(item.time, item.endTime) : item.dateLabel || "Anytime"}
-      </span>
+      {/* Inside a date group the heading already carries the date, so an
+          untimed row shows nothing here rather than a column of "Anytime". */}
+      {(item.time || item.dateLabel || !grouped) && (
+        <span
+          className="tfh-mono"
+          style={{
+            fontSize: 11.5,
+            fontWeight: item.dateLabel ? 600 : 400,
+            color: item.time ? "var(--accent)" : item.dateLabel ? (item.dateTone || "var(--date-scheduled)") : "var(--text-faint)",
+            minWidth: item.dateLabel ? 54 : 58, flexShrink: 0, marginTop: 1,
+          }}
+        >
+          {item.time ? formatTimeRange(item.time, item.endTime) : item.dateLabel || "Anytime"}
+        </span>
+      )}
       <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span
           style={{
@@ -2530,6 +2548,46 @@ const ActivityDetailModal = ({ item, projects, onClose, currentUserId, onSetStat
   );
 };
 
+// Date-led lists used to repeat the date on every row ("18 Sept", "18 Sept",
+// "24 Sept"…), which reads as noise once a day has more than one activity.
+// This groups consecutive rows under a single date heading with a rule down
+// the side, the way a diary or a comment thread does it.
+//
+// Rows WITHOUT a dateLabel (today's agenda, which is time-led) pass straight
+// through ungrouped — grouping those under one heading would say nothing.
+const GroupedAgenda = ({ items, onOpen, onOpenActivity }) => {
+  const groups = [];
+  for (const item of items) {
+    if (!item.dateLabel) { groups.push({ date: null, items: [item] }); continue; }
+    const last = groups[groups.length - 1];
+    if (last && last.date === item.dateLabel) last.items.push(item);
+    else groups.push({ date: item.dateLabel, items: [item] });
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      {groups.map((group, gi) =>
+        group.date === null ? (
+          <AgendaRow key={`u${gi}`} item={group.items[0]} onOpen={onOpen} onOpenActivity={onOpenActivity} />
+        ) : (
+          <div key={`${group.date}-${gi}`} style={{ marginBottom: 6 }}>
+            <div className="tfh-mono" style={{ fontSize: 11.5, fontWeight: 700, color: "var(--date-scheduled)", padding: "6px 2px 3px" }}>
+              {group.date}
+            </div>
+            <div style={{ borderLeft: "2px solid var(--line)", marginLeft: 6, paddingLeft: 8 }}>
+              {group.items.map((item, i) => (
+                // dateLabel is stripped so the row shows its time (or
+                // nothing) instead of repeating the heading it sits under.
+                <AgendaRow key={i} grouped item={{ ...item, dateLabel: null }} onOpen={onOpen} onOpenActivity={onOpenActivity} />
+              ))}
+            </div>
+          </div>
+        )
+      )}
+    </div>
+  );
+};
+
 const AgendaCard = ({ title, items, onOpen, onOpenActivity, emptyText }) => (
   <div className="tfh-card" style={{ padding: 18 }}>
     <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>{title}</div>
@@ -2537,7 +2595,7 @@ const AgendaCard = ({ title, items, onOpen, onOpenActivity, emptyText }) => (
       <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>{emptyText}</div>
     ) : (
       <div style={{ display: "flex", flexDirection: "column" }}>
-        {items.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} onOpenActivity={onOpenActivity} />)}
+        <GroupedAgenda items={items} onOpen={onOpen} onOpenActivity={onOpenActivity} />
       </div>
     )}
   </div>
@@ -2584,16 +2642,7 @@ const TeamMemberAgenda = ({ member, items, onOpen, onOpenActivity, emptyText, on
       {expanded && (
         <div className="tfh-expand-in" style={{ marginTop: 10 }}>
           {items.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              {items.map((item, i) => {
-                const overdue = item.kind === "task" && item.task.status !== "done" && dueMeta(item.task.due, item.task.status).label.includes("overdue");
-                return (
-                  <div key={i} style={overdue ? { borderLeft: "3px solid var(--pri-high)", background: "var(--pri-high-soft, rgba(179,38,30,0.08))", borderRadius: 6 } : undefined}>
-                    <AgendaRow item={item} onOpen={onOpen} onOpenActivity={onOpenActivity} />
-                  </div>
-                );
-              })}
-            </div>
+            <GroupedAgenda items={items} onOpen={onOpen} onOpenActivity={onOpenActivity} />
           ) : (
             <div style={{ fontSize: 11.5, color: "var(--text-faint)", padding: "0 8px" }}>{emptyText}</div>
           )}
@@ -2826,7 +2875,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
     myItems = buildUpcomingItems(myComplete, "var(--stage-done)");
     myEmptyText = "Nothing completed yet.";
   } else if (myView === "pending") {
-    myItems = buildUpcomingItems(myPending, "var(--pri-high)");
+    myItems = buildUpcomingItems(myPending);
     myEmptyText = "Nothing overdue — you're all caught up.";
   } else {
     myItems = myAgenda;
@@ -2865,8 +2914,8 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
         {myItems.length === 0 ? (
           <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>{myEmptyText}</div>
         ) : (
-          <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column" }}>
-            {myItems.map((item, i) => <AgendaRow key={i} item={item} onOpen={onOpen} onOpenActivity={setActivityDetail} />)}
+          <div className="tfh-fade-in">
+            <GroupedAgenda items={myItems} onOpen={onOpen} onOpenActivity={setActivityDetail} />
           </div>
         )}
       </div>
@@ -2881,20 +2930,10 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
         {myUpcoming.length === 0 ? (
           <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing upcoming.</div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", maxHeight: 320, overflowY: "auto" }}>
-            {myUpcoming.map((t) => (
-              <div
-                key={t.id} onClick={() => onOpen(t)} className="tfh-agenda-row"
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(t); } }}
-                role="button" tabIndex={0}
-                style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: "pointer" }}
-              >
-                <span className="tfh-mono" style={{ fontSize: 11.5, fontWeight: 600, color: "var(--date-scheduled)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
-                <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
-                {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11, color: "var(--accent)", flexShrink: 0 }}>{formatTimeRange(t.dueTime, t.endTime)}</span>}
-                <PriorityChip level={t.priority} />
-              </div>
-            ))}
+          // Grouped, so a day with four activities shows its date once
+          // rather than four times down the left edge.
+          <div style={{ maxHeight: 360, overflowY: "auto" }}>
+            <GroupedAgenda items={buildUpcomingItems(myUpcoming)} onOpen={onOpen} />
           </div>
         )}
       </div>
@@ -2907,20 +2946,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
         {myPending.length === 0 ? (
           <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "4px 8px" }}>Nothing overdue — you're all caught up.</div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {myPending.map((t) => (
-              <div
-                key={t.id} onClick={() => onOpen(t)} className="tfh-agenda-row"
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(t); } }}
-                role="button" tabIndex={0}
-                style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 8, cursor: "pointer" }}
-              >
-                <span className="tfh-mono" style={{ fontSize: 11.5, fontWeight: 600, color: "var(--pri-high)", minWidth: 78, flexShrink: 0 }}>{shortDate(t.due)}</span>
-                <span style={{ fontSize: 12.5, flex: 1 }}>{t.title}</span>
-                <PriorityChip level={t.priority} />
-              </div>
-            ))}
-          </div>
+          <GroupedAgenda items={buildUpcomingItems(myPending)} onOpen={onOpen} />
         )}
       </div>
     </div>
@@ -2997,7 +3023,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
           const theirPending = [...tasks]
             .filter((t) => t.assigneeId === u.id && t.status !== "done" && t.due && t.due < todayStr)
             .sort((a, b) => new Date(a.due) - new Date(b.due));
-          items = buildUpcomingItems(theirPending, "var(--pri-high)");
+          items = buildUpcomingItems(theirPending);
           emptyText = "Nothing pending — all caught up.";
         } else {
           const theirPastTasks = tasks
@@ -3364,7 +3390,25 @@ const TeamView = ({ tasks, users, currentUser, onOpen, onSetRole, onSetTitle, on
     return () => { cancelled = true; };
   }, [canManage, workspaceId]);
 
-  const chartData = (workload || []).map((w) => ({ name: w.name.split(" ")[0], active: w.active, color: users.find((u) => u.id === w.id)?.color || "var(--accent)" }));
+  // Carry the whole member through, not just the first name — clicking a
+  // bar needs to know WHO it is, and several people here share a first name
+  // (the chart axis alone can't tell "Sonam" from "Sonam").
+  const chartData = (workload || []).map((w) => ({
+    id: w.id,
+    name: w.name.split(" ")[0],
+    fullName: w.name,
+    active: w.active,
+    shipped: w.shipped ?? 0,
+    color: users.find((u) => u.id === w.id)?.color || "var(--accent)",
+  }));
+
+  // Which bar is selected. Clicking the same one again clears it, so the
+  // panel isn't a thing you can open but never close.
+  const [selectedBar, setSelectedBar] = useState(null);
+  const selected = chartData.find((d) => d.id === selectedBar) || null;
+  const selectedTasks = selected
+    ? tasks.filter((t) => t.assigneeId === selected.id && t.status === "done")
+    : [];
 
   const submitInvite = async (e) => {
     e.preventDefault();
@@ -3485,11 +3529,62 @@ const TeamView = ({ tasks, users, currentUser, onOpen, onSetRole, onSetTitle, on
                   <XAxis dataKey="name" tick={{ fill: "var(--chart-tick)", fontSize: 11 }} axisLine={{ stroke: "var(--chart-grid)" }} tickLine={false} />
                   <YAxis allowDecimals={false} tick={{ fill: "var(--chart-tick)", fontSize: 11 }} axisLine={false} tickLine={false} />
                   <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }} cursor={{ fill: "var(--raised)" }} />
-                  <Bar dataKey="active" radius={[6, 6, 0, 0]}>
-                    {chartData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                  <Bar
+                    dataKey="active" radius={[6, 6, 0, 0]}
+                    cursor="pointer"
+                    onClick={(bar) => setSelectedBar((prev) => (prev === bar?.id ? null : bar?.id))}
+                  >
+                    {chartData.map((d, i) => (
+                      <Cell
+                        key={i} fill={d.color}
+                        // Dim the others once something is selected, so the
+                        // chart itself shows what the panel below is about.
+                        fillOpacity={selectedBar && selectedBar !== d.id ? 0.35 : 1}
+                      />
+                    ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
+            </div>
+          )}
+          {!workloadLoading && chartData.length > 0 && !selected && (
+            <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
+              Click a bar to see what that person has completed.
+            </div>
+          )}
+          {selected && (
+            <div className="tfh-fade-in" style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                <Avatar member={users.find((u) => u.id === selected.id)} size={22} />
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{selected.fullName}</span>
+                <span className="tfh-chip" style={{ background: "var(--raised)", color: "var(--stage-done)", fontSize: 11 }}>
+                  <CheckCircle2 size={11} /> {selectedTasks.length} completed
+                </span>
+                <span className="tfh-chip" style={{ background: "var(--raised)", color: "var(--text-dim)", fontSize: 11 }}>
+                  {selected.active} active
+                </span>
+                <button className="tfh-btn tfh-btn-ghost" style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px" }} onClick={() => setSelectedBar(null)}>
+                  <X size={11} /> Clear
+                </button>
+              </div>
+              {selectedTasks.length === 0 ? (
+                <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Nothing completed yet.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 220, overflowY: "auto" }}>
+                  {[...selectedTasks]
+                    .sort((a, b) => (b.due || "").localeCompare(a.due || ""))
+                    .map((t) => (
+                      <button
+                        key={t.id} onClick={() => onOpen(t)} className="tfh-search-result"
+                        style={{ padding: "6px 8px", gap: 8 }} title={t.title}
+                      >
+                        <CheckCircle2 size={12} color="var(--stage-done)" style={{ flexShrink: 0 }} />
+                        <span style={{ fontSize: 12.5, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</span>
+                        {t.due && <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--date-scheduled)", flexShrink: 0 }}>{shortDate(t.due)}</span>}
+                      </button>
+                    ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -3741,7 +3836,16 @@ const DocumentRow = ({ doc, workspaceId, projectId, canManage, onRemove }) => {
   const isImage = doc.mimeType.startsWith("image/");
   const sizeLabel = doc.sizeBytes > 1024 * 1024 ? `${(doc.sizeBytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(doc.sizeBytes / 1024))} KB`;
 
+  const [error, setError] = useState("");
+
   const openOrDownload = async () => {
+    setError("");
+    // The row already knows the bytes are gone — say so rather than making
+    // a request that will 404.
+    if (doc.missing) {
+      setError("This file is missing from the server's storage and needs re-uploading.");
+      return;
+    }
     try {
       const url = await api.getDocumentBlobUrl(workspaceId, projectId, doc.id);
       const a = document.createElement("a");
@@ -3750,23 +3854,31 @@ const DocumentRow = ({ doc, workspaceId, projectId, canManage, onRemove }) => {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-    } catch {
-      // ignore — row stays put so they can retry
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (err) {
+      // Was a silent catch, which is why a failing click looked like
+      // nothing happening at all.
+      setError(err.message || "Couldn't open this file.");
     }
   };
 
   return (
-    <div className="tfh-card" style={{ padding: 14, display: "flex", alignItems: "center", gap: 12 }}>
+    <div className="tfh-card" style={{ padding: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", borderColor: doc.missing ? "var(--pri-medium)" : undefined }}>
       <div style={{ width: 38, height: 38, borderRadius: 9, background: "var(--raised)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-        {isImage ? <ImageIcon size={16} color="var(--text-faint)" /> : <FileText size={16} color="var(--text-faint)" />}
+        {doc.missing
+          ? <AlertTriangle size={16} color="var(--pri-medium)" />
+          : isImage ? <ImageIcon size={16} color="var(--text-faint)" /> : <FileText size={16} color="var(--text-faint)" />}
       </div>
       <button type="button" onClick={openOrDownload} style={{ flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 500, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.fileName}</div>
-        <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>{sizeLabel} · {doc.uploaderName || "Unknown"} · {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
+          {sizeLabel} · {doc.uploaderName || "Unknown"} · {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+          {doc.missing && <span style={{ color: "var(--pri-medium)", fontWeight: 600 }}> · file missing from storage</span>}
+        </div>
       </button>
       <button type="button" onClick={openOrDownload} className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} aria-label="Download"><Download size={14} color="var(--text-faint)" /></button>
       {canManage && <button type="button" onClick={onRemove} className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} aria-label="Delete"><Trash2 size={14} color="var(--text-faint)" /></button>}
+      {error && <div style={{ flexBasis: "100%", fontSize: 11.5, color: "var(--pri-high)", lineHeight: 1.4 }}>{error}</div>}
     </div>
   );
 };
@@ -4447,14 +4559,28 @@ const BoardFilesPanel = ({ workspaceId, projectId, projectName, onOpenFiles }) =
 
   const total = docs.length + links.length;
 
+  const [openError, setOpenError] = useState("");
+
   const openDoc = async (doc) => {
+    setOpenError("");
+    if (doc.missing) {
+      setOpenError(`"${doc.fileName}" is no longer in storage — it needs re-uploading.`);
+      return;
+    }
     try {
       const url = await api.getDocumentBlobUrl(workspaceId, projectId, doc.id);
       const a = document.createElement("a");
       a.href = url;
       if ((doc.mimeType || "").startsWith("image/")) a.target = "_blank"; else a.download = doc.fileName;
       document.body.appendChild(a); a.click(); a.remove();
-    } catch { /* surfaced on the Files page, not worth a toast here */ }
+      // The blob stays in memory until revoked; the click has already been
+      // handed off by the time this runs.
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (err) {
+      // This used to be an empty catch, so a failed open did NOTHING
+      // visible — the "I click these files and they don't open" report.
+      setOpenError(err.message || `Couldn't open "${doc.fileName}".`);
+    }
   };
 
   return (
@@ -4472,6 +4598,9 @@ const BoardFilesPanel = ({ workspaceId, projectId, projectName, onOpenFiles }) =
         </button>
       </div>
 
+      {openError && (
+        <div style={{ fontSize: 11, color: "var(--pri-high)", marginBottom: 8, lineHeight: 1.4 }}>{openError}</div>
+      )}
       {loading ? (
         <div style={{ padding: "14px 4px", textAlign: "center" }}><Spinner size={16} /></div>
       ) : total === 0 ? (
@@ -4483,9 +4612,12 @@ const BoardFilesPanel = ({ workspaceId, projectId, projectName, onOpenFiles }) =
           {docs.map((d) => (
             <button
               key={d.id} onClick={() => openDoc(d)} className="tfh-search-result"
-              style={{ padding: "6px 8px", gap: 7 }} title={d.fileName}
+              style={{ padding: "6px 8px", gap: 7, opacity: d.missing ? 0.6 : 1 }}
+              title={d.missing ? `${d.fileName} — file missing from storage` : d.fileName}
             >
-              {(d.mimeType || "").startsWith("image/") ? <ImageIcon size={12} color="var(--text-faint)" style={{ flexShrink: 0 }} /> : <FileText size={12} color="var(--text-faint)" style={{ flexShrink: 0 }} />}
+              {d.missing
+                ? <AlertTriangle size={12} color="var(--pri-medium)" style={{ flexShrink: 0 }} />
+                : (d.mimeType || "").startsWith("image/") ? <ImageIcon size={12} color="var(--text-faint)" style={{ flexShrink: 0 }} /> : <FileText size={12} color="var(--text-faint)" style={{ flexShrink: 0 }} />}
               <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.fileName}</span>
             </button>
           ))}
@@ -5664,6 +5796,11 @@ const CreateWorkspaceScreen = () => {
 // between projects (previously this and a separate switcher dropdown
 // overlapped; consolidated into just this one).
 const PROJECT_LIST_OPEN_KEY = "pmdamc.sidebar.projectsOpen";
+const SIDEBAR_WIDTH_KEY = "pmdamc.sidebar.width";
+const SIDEBAR_DEFAULT_WIDTH = 216;
+const SIDEBAR_MIN_WIDTH = 160;
+const SIDEBAR_MAX_WIDTH = 420;
+const clampSidebarWidth = (w) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(w)));
 
 // One project row. Beyond selecting and drag-reordering, a manager gets
 // Rename (inline, in place — no dialog for a one-field change) and Delete
@@ -6075,7 +6212,45 @@ function Workspace() {
     if (projectId && projectId !== projectFilter) setProjectFilter(projectId);
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [draft, setDraft] = useState(null);
-  const [activityFocus, setActivityFocus] = useState(null); // {date, tab, token} — see goToActivityLog
+  // Sidebar width, dragged like a spreadsheet column. Clamped so it can't
+  // be dragged to nothing (unrecoverable without clearing storage) or wide
+  // enough to crowd out the content.
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const stored = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY), 10);
+      return Number.isFinite(stored) ? clampSidebarWidth(stored) : SIDEBAR_DEFAULT_WIDTH;
+    } catch { return SIDEBAR_DEFAULT_WIDTH; }
+  });
+  const [resizing, setResizing] = useState(false);
+
+  const setSidebarWidthPersisted = (next) => {
+    const width = clampSidebarWidth(next);
+    setSidebarWidth(width);
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch { /* private mode — in-memory only */ }
+  };
+
+  const startResize = (e) => {
+    e.preventDefault();
+    setResizing(true);
+    const onMove = (ev) => setSidebarWidth(clampSidebarWidth(ev.clientX));
+    const onUp = (ev) => {
+      setResizing(false);
+      setSidebarWidthPersisted(ev.clientX);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      // Text selection is disabled during the drag (see .tfh-resizing) —
+      // without it the whole page highlights as you sweep across it.
+      document.body.classList.remove("tfh-resizing");
+    };
+    document.body.classList.add("tfh-resizing");
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  // A logged activity picked from global search. With the Collaboration Log
+  // module gone there's no page to send them to, so it opens the same detail
+  // popup the dashboard uses.
+  const [searchActivity, setSearchActivity] = useState(null);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -6159,19 +6334,11 @@ function Workspace() {
   const openEditById = (id) => { const t = tasks.find((x) => x.id === id); if (t) openEdit(t); };
   const closeDialog = () => { setDraft(null); setSaveError(""); };
 
-  // Used by global search when you pick a logged activity: jump to that day
-  // in the Collaboration Log. (The dashboard's activity popup used to offer
-  // this too; that button was removed, search is now the only way in.) The token
-  // makes each click a distinct focus even when the day and tab repeat, so
-  // the Activity view re-points every time rather than only on the first.
-  const goToActivityLog = (item) => {
-    setActivityFocus({
-      date: item.entryDate,
-      tab: item.author?.id === user.id ? "mine" : "team",
-      token: Date.now(),
-    });
-    setView("activity");
-  };
+  // The Collaboration Log module was removed — activities are created and
+  // tracked through "Initiate Collaboration" now. Previously logged entries
+  // are still READ on the dashboard and in search (nothing was deleted), but
+  // there's no longer a page to navigate to, so a search hit on one just
+  // opens its detail popup where it stands.
 
   const saveDraft = async () => {
     if (!draft.title.trim()) return;
@@ -6204,9 +6371,9 @@ function Workspace() {
         // client-side and the server rejects it regardless).
         const isOwnTask = draft.assigneeId === user.id;
         const patch = canManage
-          ? { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, assigneeId: draft.assigneeId, due: draft.due, dueTime: draft.dueTime || null, endTime: draft.endTime || null }
+          ? { title: draft.title, description: draft.description, meetingNotes: draft.meetingNotes || "", status: draft.status, priority: draft.priority, assigneeId: draft.assigneeId, due: draft.due, dueTime: draft.dueTime || null, endTime: draft.endTime || null }
           : isOwnTask
-            ? { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, due: draft.due, dueTime: draft.dueTime || null, endTime: draft.endTime || null }
+            ? { title: draft.title, description: draft.description, meetingNotes: draft.meetingNotes || "", status: draft.status, priority: draft.priority, due: draft.due, dueTime: draft.dueTime || null, endTime: draft.endTime || null }
             : { status: draft.status };
         // The repeat rule only ever travels on the series head — the server
         // rejects it on an occurrence, and sending it unchanged from one
@@ -6235,9 +6402,9 @@ function Workspace() {
         // atomically with the task server-side); pendingFiles can't — those
         // upload as a real follow-up request right below, once the task has
         // an id to attach to.
-        const { title, description, status, priority, assigneeId, due, dueTime, endTime, recurrence } = draft;
+        const { title, description, meetingNotes, status, priority, assigneeId, due, dueTime, endTime, recurrence } = draft;
         const { task } = await api.createTask(currentId, taskProjectId, {
-          title, description, status, priority, assigneeId, due, dueTime, endTime: endTime || null,
+          title, description, meetingNotes: meetingNotes || "", status, priority, assigneeId, due, dueTime, endTime: endTime || null,
           recurrence: recurrence || null,
           subtasks: cleanSubtasks, links: draft.pendingLinks,
         });
@@ -6389,7 +6556,28 @@ function Workspace() {
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
       {/* Sidebar */}
-      <div className={`tfh-sidebar ${mobileNavOpen ? "open" : ""}`} style={{ width: 216, borderRight: "1px solid var(--line)", padding: "20px 14px", display: "flex", flexDirection: "column", gap: 22, background: "var(--ink)" }}>
+      <div
+        className={`tfh-sidebar ${mobileNavOpen ? "open" : ""}`}
+        style={{ width: sidebarWidth, borderRight: "1px solid var(--line)", padding: "20px 14px", display: "flex", flexDirection: "column", gap: 22, background: "var(--ink)", position: "relative", flexShrink: 0 }}
+      >
+        {/* Drag the edge to resize, like a spreadsheet column. The handle is
+            a hair wider than the border it sits on so it's actually grabbable
+            — a 1px target is not. Double-click resets to the default. */}
+        <div
+          className={`tfh-sidebar-resizer ${resizing ? "active" : ""}`}
+          onMouseDown={startResize}
+          onDoubleClick={() => setSidebarWidthPersisted(SIDEBAR_DEFAULT_WIDTH)}
+          onKeyDown={(e) => {
+            // Keyboard-resizable too, since a drag handle is unusable
+            // without a pointer.
+            if (e.key === "ArrowLeft") { e.preventDefault(); setSidebarWidthPersisted(sidebarWidth - 16); }
+            if (e.key === "ArrowRight") { e.preventDefault(); setSidebarWidthPersisted(sidebarWidth + 16); }
+          }}
+          role="separator" aria-orientation="vertical" tabIndex={0}
+          aria-label="Resize the sidebar"
+          aria-valuenow={sidebarWidth} aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH}
+          title="Drag to resize · double-click to reset"
+        />
         <WorkspaceSwitcher />
 
         {/* DASHBOARD section: Dashboard + Collaboration Log + Board grouped
@@ -6483,9 +6671,11 @@ function Workspace() {
             <GlobalSearch
               workspaceId={currentId} tasks={tasks} users={users} currentUserId={user.id}
               onOpenTask={openEdit}
-              onOpenActivityDay={(hit) => goToActivityLog({ entryDate: hit.entryDate, author: hit.author })}
+              onOpenActivityDay={(hit) => setSearchActivity(hit)}
             />
-            <button className="tfh-btn" style={{ flexShrink: 0 }} onClick={() => openCreate("todo")}><Plus size={14} /> Quick add</button>
+            <button className="tfh-btn tfh-btn-accent" style={{ flexShrink: 0 }} onClick={() => openCreate("todo")}>
+              <Plus size={14} /> <span className="tfh-hide-mobile">Initiate Collaboration</span><span className="tfh-show-mobile-only">Initiate</span>
+            </button>
             <NotificationBell
               notifications={notifications} onOpenTask={openEditById}
               onMarkRead={markRead} onMarkAll={markAllRead}
@@ -6521,7 +6711,6 @@ function Workspace() {
             />
           )}
           {view === "team" && <TeamView tasks={tasks} users={users} currentUser={currentUser} onOpen={openEdit} onSetRole={setRole} onSetTitle={setTitle} onRemoveMember={removeMember} onInvite={invite} canManage={canManage} workspaceId={currentId} projects={projects} onSetProjectLead={setProjectLeadFor} />}
-          {view === "activity" && <ActivityLogView workspaceId={currentId} currentUser={currentUser} canManage={canManage} projects={projects} focus={activityFocus} />}
           {view === "calendar" && <CalendarView tasks={tasks} users={users} onOpen={openEdit} workspaceId={currentId} canManage={canManage} />}
           {view === "files" && (
             <DocumentsView
@@ -6544,6 +6733,18 @@ function Workspace() {
           )}
         </div>
       </div>
+
+      {searchActivity && (
+        <ActivityDetailModal
+          item={searchActivity}
+          projects={projects}
+          currentUserId={user.id}
+          onClose={() => setSearchActivity(null)}
+          onSetStatus={async (hit, next) => {
+            await api.setActivityBlockStatus(currentId, hit.entryDate, hit.blockIndex, next);
+          }}
+        />
+      )}
 
       {draft && <TaskDialog draft={draft} setDraft={setDraft} users={users} projects={projects} onClose={closeDialog} onSave={saveDraft} onDelete={deleteTask} saving={saving} saveError={saveError} uploadPhase={uploadPhase} isWorkspaceManager={canManage} workspaceId={currentId} currentUserId={user.id} />}
       {bulkAddOpen && <BulkAddModal users={users} projects={projects} currentProjectId={projectId} currentUserId={user.id} onClose={() => setBulkAddOpen(false)} onSubmit={bulkAddTasks} />}

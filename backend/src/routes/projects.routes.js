@@ -293,7 +293,16 @@ router.delete("/:projectId/links/:linkId", requireProjectInWorkspace, requirePro
 
 router.get("/:projectId/documents", requireProjectInWorkspace, async (req, res, next) => {
   try {
-    res.json({ documents: await getDocumentsForProject(req.params.projectId) });
+    const documents = await getDocumentsForProject(req.params.projectId);
+    // Say whether the bytes are actually still on disk. Uploads live on the
+    // server's local filesystem, which on an ephemeral host (Render's default
+    // instance storage) is wiped on every deploy and restart — the database
+    // row survives, the file doesn't. Reporting it here is what lets the UI
+    // show a file as unavailable instead of appearing to do nothing when
+    // someone clicks it, which is exactly how this was first reported.
+    res.json({
+      documents: documents.map((d) => ({ ...d, missing: !d.storagePath || !fs.existsSync(d.storagePath) })),
+    });
   } catch (err) { next(err); }
 });
 
