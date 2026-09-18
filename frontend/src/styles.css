@@ -22,6 +22,12 @@
      brand green (--accent) used for clock times, and from the priority
      colours. */
   --date-scheduled: #8fb4ff;
+  /* Supervisor notes under an agenda row. Deliberately NOT --pri-high:
+     full-saturation red on a dark ground vibrates and made the whole
+     Pending block painful to read. This is the same hue, desaturated and
+     lightened, so a note still reads as a note without shouting. */
+  --comment-note: #e2a09a;
+  --comment-note-line: rgba(226, 160, 154, 0.55);
   --chart-grid: #2b3142;
   --chart-tick: #8b93a7;
   --chart-tooltip-bg: #20263f;
@@ -47,6 +53,8 @@
   --pri-medium: #c9821b;
   --pri-high: #d1453d;
   --date-scheduled: #2f5fc0;
+  --comment-note: #b8514a;
+  --comment-note-line: rgba(184, 81, 74, 0.5);
   --chart-grid: #dee3ed;
   --chart-tick: #5b6272;
   --chart-tooltip-bg: #ffffff;
@@ -81,6 +89,8 @@
   --pri-medium: #b2741a;
   --pri-high: #bf4430;
   --date-scheduled: #9a5a12;
+  --comment-note: #a9584a;
+  --comment-note-line: rgba(169, 88, 74, 0.5);
   --chart-grid: #ddcdb6;
   --chart-tick: #6b5a48;
   --chart-tooltip-bg: #fdf8f0;
@@ -132,6 +142,15 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 }
 .tfh-nav-item:hover { background: var(--raised); color: var(--text); }
 .tfh-nav-item.active { background: var(--accent-soft); color: var(--accent); }
+/* An ACTION in the nav list, not a destination: brand-tinted and dashed so
+   it reads as "this does something" rather than "this is a page you're not
+   on". It never gets .active, because clicking it leaves you where you are. */
+.tfh-nav-action {
+  color: var(--accent);
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  background: transparent;
+}
+.tfh-nav-action:hover { background: var(--accent-soft); color: var(--accent); }
 
 .tfh-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;

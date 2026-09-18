@@ -2355,8 +2355,16 @@ const buildPastItems = (pastTasks, pastLogEntries, author) => {
 // overdue dates in the priority red, completed ones in the done colour —
 // rather than every date-led list looking identical. Defaults to the normal
 // scheduled-date colour.
+// `time`/`endTime` ride along so a scheduled activity shows its clock time
+// in the row's left gutter — under a date heading that gutter is otherwise
+// empty, which is exactly where the Chief asked for the time to sit. Untimed
+// activities leave it blank rather than printing a placeholder.
 const buildUpcomingItems = (upcomingTasks, dateTone) =>
-  upcomingTasks.map((t) => ({ dateStr: t.due, dateLabel: shortDate(t.due), label: t.title, kind: "task", task: t, dateTone }));
+  upcomingTasks.map((t) => ({
+    dateStr: t.due, dateLabel: shortDate(t.due), label: t.title,
+    time: t.dueTime || null, endTime: t.endTime || null,
+    kind: "task", task: t, dateTone,
+  }));
 
 const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
   // Both kinds of row are clickable now: a task opens the task dialog, a
@@ -2415,10 +2423,10 @@ const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
             {(item.block.links || []).length > 0 ? <Link2 size={9} /> : <FileText size={9} />} details
           </span>
         )}
-        {/* When the row is date-led (upcoming/pending) but the task carries a
-            clock time, surface that time on the right too — the Chief asked to
-            see the time against each upcoming collab. */}
-        {item.kind === "task" && item.dateLabel && item.task.dueTime && (
+        {/* A date-led row that is NOT inside a date group still shows its
+            date in the gutter, so its time goes on the right instead of
+            being lost. Inside a group the gutter already carries the time. */}
+        {item.kind === "task" && item.dateLabel && !item.time && item.task.dueTime && (
           <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--accent)", marginLeft: "auto" }}>{formatTimeRange(item.task.dueTime, item.task.endTime)}</span>
         )}
       </div>
@@ -2426,11 +2434,13 @@ const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
     {/* A task's latest comment shows indented right under it — so a
         supervisor's note on a member's task/activity appears alongside it in
         Team Collabs, not hidden inside the task dialog. */}
-    {/* Supervisor notes read in the priority red — they're feedback that
-        needs acting on, not more grey body text to scroll past. */}
+    {/* Supervisor notes read red-ish — they're feedback that needs acting
+        on, not more grey body text to scroll past. --comment-note, not
+        --pri-high: the full-strength red made a Pending block with several
+        notes in it genuinely hard to look at on the dark theme. */}
     {item.kind === "task" && item.task.lastCommentBody && (
-      <div onClick={() => onOpen(item.task)} style={{ marginLeft: item.dateLabel ? 62 : 66, marginBottom: 4, paddingLeft: 10, borderLeft: "2px solid var(--pri-high)", cursor: "pointer" }}>
-        <span style={{ fontSize: 11, color: "var(--pri-high)", fontWeight: 500 }}>
+      <div onClick={() => onOpen(item.task)} style={{ marginLeft: item.dateLabel ? 62 : 66, marginBottom: 4, paddingLeft: 10, borderLeft: "2px solid var(--comment-note-line)", cursor: "pointer" }}>
+        <span style={{ fontSize: 11, color: "var(--comment-note)", fontWeight: 500 }}>
           <MessageSquare size={9} style={{ display: "inline", marginRight: 4, verticalAlign: "middle" }} />
           {item.task.lastCommentAuthor ? `${item.task.lastCommentAuthor}: ` : ""}{item.task.lastCommentBody}
           {item.task.commentCount > 1 ? `  (+${item.task.commentCount - 1} more)` : ""}
@@ -6587,9 +6597,26 @@ function Workspace() {
         <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 0.5, padding: "0 10px", marginBottom: 4 }}>Dashboard</div>
           {visibleNav.filter((n) => ["dashboard", "activity", "board"].includes(n.id)).map((n) => (
-            <button key={n.id} className={`tfh-nav-item ${view === n.id ? "active" : ""}`} onClick={() => { setView(n.id); setMobileNavOpen(false); }}>
-              <n.icon size={16} /> {n.label}
-            </button>
+            <React.Fragment key={n.id}>
+              <button className={`tfh-nav-item ${view === n.id ? "active" : ""}`} onClick={() => { setView(n.id); setMobileNavOpen(false); }}>
+                <n.icon size={16} /> {n.label}
+              </button>
+              {/* Sits between Dashboard and Board, where the Chief asked for
+                  it. It's an ACTION, not a destination, so it never takes the
+                  "active" state and is tinted with the brand accent — a nav
+                  item you click and stay where you are would otherwise look
+                  broken. The top-bar button stays too; this is the same
+                  dialog, reachable without crossing the screen. */}
+              {n.id === "dashboard" && (
+                <button
+                  className="tfh-nav-item tfh-nav-action"
+                  onClick={() => { openCreate("todo"); setMobileNavOpen(false); }}
+                  title="Initiate a collaboration"
+                >
+                  <Plus size={16} /> Initiate Collaboration
+                </button>
+              )}
+            </React.Fragment>
           ))}
         </div>
 
