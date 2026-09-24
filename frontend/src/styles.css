@@ -337,6 +337,43 @@ body.tfh-resizing * { cursor: col-resize !important; }
    wildly different widths, so a shrink-to-fit gutter left every title
    starting at a different x — which is what "the time looks haphazard"
    was. tabular-nums stops 1s and 7s from shifting things too. */
+/* "Assigned by" — a face, a quiet label and a name, as one pill. The avatar
+   does the recognising, so the name can stay small; it sits at the right end
+   of the row so attribution lines up down the card instead of jostling after
+   titles of different lengths. */
+.tfh-assigned-by {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-left: auto; flex-shrink: 0;
+  padding: 2px 8px 2px 3px; border-radius: 999px;
+  background: var(--raised); border: 1px solid var(--line);
+  max-width: 190px; overflow: hidden;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.tfh-agenda-row:hover .tfh-assigned-by { border-color: var(--accent); background: var(--accent-soft); }
+.tfh-assigned-by-label {
+  font-size: 9.5px; letter-spacing: 0.4px; text-transform: uppercase;
+  color: var(--text-faint); font-weight: 600; flex-shrink: 0;
+}
+.tfh-assigned-by-name {
+  font-size: 11px; font-weight: 600; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tfh-agenda-row:hover .tfh-assigned-by-name { color: var(--text); }
+
+/* The Team column is a fraction of the dashboard's width and the user can
+   drag it narrower still, so the label goes and the name is trimmed harder
+   there — the avatar already carries the recognition. */
+.tfh-team-column .tfh-assigned-by { max-width: 132px; padding-left: 2px; }
+.tfh-team-column .tfh-assigned-by-label { display: none; }
+.tfh-team-column .tfh-assigned-by-name { font-size: 10.5px; }
+
+/* Narrow screens: the name gives way and the avatar carries it alone — the
+   row's title matters more than the attribution. */
+@media (max-width: 720px) {
+  .tfh-assigned-by-label, .tfh-assigned-by-name { display: none; }
+  .tfh-assigned-by { padding: 2px; }
+}
+
 .tfh-agenda-time {
   width: 124px; flex-shrink: 0; text-align: right; white-space: nowrap;
   font-size: 11.5px; margin-top: 1px; font-variant-numeric: tabular-nums;

@@ -321,11 +321,11 @@ const Logo = ({ size = 30 }) => (
   <img src="/logo.png" alt="PMDAMC" style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }} />
 );
 
-// Who is looking at the screen. A context rather than a prop because
-// "assigned by" appears on rows rendered from half a dozen places, and
-// threading the viewer's id through every one of them would be the kind of
-// change that gets forgotten in exactly one spot.
-const ViewerContext = React.createContext(null);
+// Who is looking at the screen, and the roster to look people up in. A
+// context rather than props because "assigned by" appears on rows rendered
+// from half a dozen places, and threading these through every one of them
+// would be the kind of change that gets forgotten in exactly one spot.
+const ViewerContext = React.createContext({ viewerId: null, membersById: new Map() });
 
 // Shared across all <Avatar> instances so the same person's photo is only
 // fetched once per session, however many task cards/avatars show them.
@@ -465,7 +465,7 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
             <Paperclip size={10} /> {task.attachmentCount}
           </span>
         )}
-        <AssignedByChip task={task} />
+        <AssignedByChip task={task} compact />
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: 11.5, color: isDone ? "var(--accent)" : meta.tone, fontWeight: 500 }}>{meta.label}</span>
@@ -1502,7 +1502,7 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
         {/* Who gave you this piece of work. First thing in the dialog,
             because "who asked me to do this?" is the question people open a
             task to answer. Absent when you created it yourself. */}
-        {draft.id && draft.createdByName && draft.createdBy !== currentUserId && (
+        {draft.id && draft.createdByName && draft.createdBy !== draft.assigneeId && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--text)", background: "var(--accent-soft)", padding: "9px 12px", borderRadius: 10, marginBottom: 14 }}>
             <UserPlus size={13} color="var(--accent)" />
             <span>Assigned by <strong>{draft.createdByName}</strong></span>
@@ -2400,24 +2400,53 @@ const buildUpcomingItems = (upcomingTasks, dateTone) =>
     kind: "task", task: t, dateTone,
   }));
 
-// "Assigned by <name>" — deliberately absent when you created the task
-// yourself, and absent when we don't know who did (older rows created before
-// the column was surfaced).
-const AssignedByChip = ({ task }) => {
-  const viewerId = useContext(ViewerContext);
-  if (!task?.createdBy || !viewerId) return null;
-  if (task.createdBy === viewerId) return null;
-  if (!task.createdByName) return null;
+// "Assigned by <person>" — their actual face and name, not a line of grey
+// text, because the point is to recognise WHO at a glance. Absent when the
+// task was entered by the person who has to do it, and absent when we don't
+// know who created it (rows from before the name was surfaced).
+//
+// `compact` is the board-card form: avatar and first name only, since a card
+// is a fraction of a row's width.
+const AssignedByChip = ({ task, compact }) => {
+  const { membersById } = useContext(ViewerContext);
+  if (!task?.createdBy || !task.createdByName) return null;
+  // The test is "did this person enter it themselves?", NOT "did the person
+  // looking at the screen create it". Those are the same thing on your own
+  // dashboard and different everywhere else: a supervisor reading the Team
+  // column needs to see that HE is the one who gave Sonam that task, and the
+  // viewer-based test hid exactly that. "If I input the task by myself, no
+  // need to show it" — so hide it only when creator and assignee are one
+  // person.
+  if (task.assigneeId && task.createdBy === task.assigneeId) return null;
+
+  // The roster entry carries the colour, initials and photo. Falling back to
+  // a name-only member keeps the chip working for someone who has since left
+  // the workspace rather than dropping the attribution entirely.
+  const person = membersById?.get(task.createdBy) || { id: task.createdBy, name: task.createdByName, initials: initialsOf(task.createdByName) };
+  const shown = compact ? String(task.createdByName).split(" ")[0] : task.createdByName;
+
   return (
     <span
-      className="tfh-chip"
-      style={{ fontSize: 9.5, background: "var(--raised)", color: "var(--text-dim)", whiteSpace: "nowrap" }}
-      title={`${task.createdByName} created this task`}
+      className="tfh-assigned-by"
+      title={`Assigned by ${task.createdByName}`}
     >
-      <UserPlus size={9} /> by {task.createdByName}
+      <Avatar member={person} size={compact ? 14 : 17} />
+      {!compact && <span className="tfh-assigned-by-label">from</span>}
+      <span className="tfh-assigned-by-name">{shown}</span>
     </span>
   );
 };
+
+// Two letters from a name, matching how the server builds them, so a person
+// missing from the roster still gets a sensible avatar rather than a blank.
+const initialsOf = (name) =>
+  String(name || "")
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0] || "")
+    .join("")
+    .toUpperCase() || "?";
 
 const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
   // Both kinds of row are clickable now: a task opens the task dialog, a
@@ -2466,10 +2495,6 @@ const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
           {item.label}
         </span>
         {item.kind === "task" && <PriorityChip level={item.task.priority} />}
-        {/* Who gave you this. Shown ONLY when someone else created it — a
-            task you entered yourself needs no attribution, and printing
-            "Assigned by you" on every row is noise. */}
-        {item.kind === "task" && <AssignedByChip task={item.task} />}
         {item.kind === "activity" && <ActivityStatusChip status={item.status} />}
         {/* An activity carrying extra detail advertises it, so it's obvious
             there's something behind the click rather than a dead row. */}
@@ -2485,6 +2510,14 @@ const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
           <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--accent)", marginLeft: "auto" }}>{formatTimeRange(item.task.dueTime, item.task.endTime)}</span>
         )}
       </div>
+      {/* Who gave you this. A SIBLING of the title block, not inside it: the
+          title block wraps its chips, and an attribution that wraps onto its
+          own line under a long title is exactly the untidiness this is meant
+          to avoid. Out here it stays pinned to the right edge on one line,
+          however long the title runs. Shown ONLY when someone else created
+          it — a task you entered yourself needs no attribution, and
+          "assigned by you" on every row is noise. */}
+      {item.kind === "task" && <AssignedByChip task={item.task} />}
     </div>
     {/* A task's latest comment shows indented right under it — so a
         supervisor's note on a member's task/activity appears alongside it in
@@ -6624,6 +6657,17 @@ function Workspace() {
     setPermission(result);
   };
 
+  // Every hook must run on every render, so this lives with the other hooks
+  // and above the early returns below — React counts them positionally, and
+  // a useMemo after a conditional return crashes the app with "rendered more
+  // hooks than during the previous render" the moment a load finishes.
+  // Rebuilt only when the roster changes: this value sits above the whole
+  // tree, so a fresh object every render would re-render every row.
+  const viewerContextValue = useMemo(
+    () => ({ viewerId: user.id, membersById: new Map((users || []).map((u) => [u.id, u])) }),
+    [user.id, users]
+  );
+
   const openCreate = (status = "todo") => { setDraft(emptyDraft(status, users, user.id, projectId)); setSaveError(""); };
   // Assign Task → new-task dialog prefilled with this member as assignee.
   const openCreateFor = (member) => { setDraft({ ...emptyDraft("todo", users, member.id, projectId), assigneeId: member.id }); setSaveError(""); };
@@ -6854,7 +6898,7 @@ function Workspace() {
     .filter((n) => projectId || n.id === "dashboard" || n.id === "team" || n.id === "activity" || n.id === "board");
 
   return (
-    <ViewerContext.Provider value={user.id}>
+    <ViewerContext.Provider value={viewerContextValue}>
     <div style={{ display: "flex", minHeight: "100vh" }}>
       {/* Sidebar */}
       <div
