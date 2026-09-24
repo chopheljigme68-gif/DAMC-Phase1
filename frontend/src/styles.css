@@ -330,6 +330,35 @@ body.tfh-resizing * { cursor: col-resize !important; }
 @keyframes tfhPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
 .tfh-dashboard-columns { display: flex; gap: 22px; align-items: flex-start; }
+
+
+/* The time/date gutter on an agenda row. A fixed width plus right alignment
+   is what makes the titles line up: "9:00 AM" and "11:00 AM – 12:00 PM" are
+   wildly different widths, so a shrink-to-fit gutter left every title
+   starting at a different x — which is what "the time looks haphazard"
+   was. tabular-nums stops 1s and 7s from shifting things too. */
+.tfh-agenda-time {
+  width: 124px; flex-shrink: 0; text-align: right; white-space: nowrap;
+  font-size: 11.5px; margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+/* The Team column is much narrower than the dashboard's own cards, so the
+   gutter there is sized down rather than eating half the row. */
+.tfh-team-column .tfh-agenda-time { width: 104px; font-size: 10.5px; }
+
+/* The draggable divider between "mine" and the Team column. Same behaviour
+   as the sidebar handle, but it moves a split rather than one edge. */
+.tfh-column-resizer {
+  align-self: stretch; width: 9px; flex-shrink: 0; cursor: col-resize;
+  border-radius: 5px; background: transparent; border: none; padding: 0;
+  transition: background 0.12s ease; position: relative;
+}
+.tfh-column-resizer::after {
+  content: ""; position: absolute; top: 4px; bottom: 4px; left: 4px;
+  width: 1px; background: var(--line);
+}
+.tfh-column-resizer:hover, .tfh-column-resizer.active,
+.tfh-column-resizer:focus-visible { background: var(--accent-soft); outline: none; }
+.tfh-column-resizer:hover::after, .tfh-column-resizer.active::after { background: var(--accent); }
 .tfh-show-mobile-only { display: none; }
 
 @media (max-width: 860px) {
@@ -345,6 +374,11 @@ body.tfh-resizing * { cursor: col-resize !important; }
      mine is second (desktop: right column) — plain column direction on
      mobile keeps that same top-to-bottom order, team reads first. */
   .tfh-dashboard-columns { flex-direction: column; gap: 26px; }
+  /* Stacked: there is no split to drag, and the columns take the full
+     width regardless of the stored percentage. */
+  .tfh-column-resizer { display: none; }
+  .tfh-dashboard-columns > div { flex-basis: auto !important; }
+  .tfh-agenda-time { width: 104px; }
 }
 
 /* ============================================================ */

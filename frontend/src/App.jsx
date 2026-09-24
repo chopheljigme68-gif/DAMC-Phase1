@@ -333,7 +333,10 @@ const useAvatarPhoto = (member) => {
     let cancelled = false;
     api.getAvatarBlobUrl(member.id)
       .then((blobUrl) => { avatarUrlCache.set(member.id, blobUrl); if (!cancelled) setUrl(blobUrl); })
-      .catch(() => {});
+      // Cache the MISS too. Without this every remount of every avatar for a
+      // person with no photo fired another request, which is how one page
+      // produced two dozen failed requests for the same handful of people.
+      .catch(() => { avatarUrlCache.set(member.id, null); });
     return () => { cancelled = true; };
   }, [member?.id, member?.avatarUrl]);
   return url;
@@ -499,7 +502,10 @@ const Column = ({ stage, tasks, users, onOpen, onAdd, onComplete, onReopen, canM
 /* ------------------------------------------------------------------ */
 const emptyDraft = (status, users, currentUserId, projectId) => ({
   id: null, title: "", description: "", meetingNotes: "", status: status || "todo", priority: "medium",
-  assigneeId: currentUserId || users[0]?.id || "", due: localDateStr(new Date(Date.now() + 3 * 86400000)),
+  // Today, not "three days out": almost everything logged here is being
+  // recorded on the day it happens or is about to. A default you have to
+  // correct on most entries is worse than no default.
+  assigneeId: currentUserId || users[0]?.id || "", due: localDateStr(new Date()),
   dueTime: "", endTime: "", subtasks: [], pendingLinks: [], pendingFiles: [], projectId: projectId || "",
   recurrence: null,
 });
@@ -2393,12 +2399,10 @@ const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
           untimed row shows nothing here rather than a column of "Anytime". */}
       {(item.time || item.dateLabel || !grouped) && (
         <span
-          className="tfh-mono"
+          className="tfh-mono tfh-agenda-time"
           style={{
-            fontSize: 11.5,
             fontWeight: item.dateLabel ? 600 : 400,
             color: item.time ? "var(--accent)" : item.dateLabel ? (item.dateTone || "var(--date-scheduled)") : "var(--text-faint)",
-            minWidth: item.dateLabel ? 54 : 58, flexShrink: 0, marginTop: 1,
           }}
         >
           {item.time ? formatTimeRange(item.time, item.endTime) : item.dateLabel || "Anytime"}
@@ -2777,6 +2781,16 @@ const AllTeamsCollabsPanel = ({ workspaceId, day, setDay, tasks, users, currentU
   );
 };
 
+// The dashboard's two-column split, stored as the Team column's share of the
+// width so it holds up across window sizes and screens. Same idea as the
+// sidebar width, different unit.
+const TEAM_COLUMN_PCT_KEY = "pmdamc.dashboard.teamPct";
+const TEAM_COLUMN_DEFAULT_PCT = 53;
+const TEAM_COLUMN_MIN_PCT = 28;
+const TEAM_COLUMN_MAX_PCT = 72;
+const clampTeamPct = (p) =>
+  Math.min(TEAM_COLUMN_MAX_PCT, Math.max(TEAM_COLUMN_MIN_PCT, Math.round(p * 10) / 10));
+
 const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProject, onCreateProject, onAssignTask, projects }) => {
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
@@ -2784,6 +2798,49 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   const [teamLogs, setTeamLogs] = useState([]); // wide range: last 30 days through today
   const [logsLoading, setLogsLoading] = useState(true);
   const [teamTab, setTeamTab] = useState("today");
+  // The dashboard split, dragged like a spreadsheet column: one number, the
+  // Team column's share of the row, with "mine" taking the remainder. Storing
+  // a percentage rather than pixels means the split survives a window resize
+  // and a different monitor. Clamped so neither column can be dragged away.
+  const [teamPct, setTeamPct] = useState(() => {
+    try {
+      const stored = parseFloat(localStorage.getItem(TEAM_COLUMN_PCT_KEY));
+      return Number.isFinite(stored) ? clampTeamPct(stored) : TEAM_COLUMN_DEFAULT_PCT;
+    } catch { return TEAM_COLUMN_DEFAULT_PCT; }
+  });
+  const [columnResizing, setColumnResizing] = useState(false);
+  const columnsRef = useRef(null);
+
+  const setTeamPctPersisted = (next) => {
+    const pct = clampTeamPct(next);
+    setTeamPct(pct);
+    try { localStorage.setItem(TEAM_COLUMN_PCT_KEY, String(pct)); } catch { /* private mode — in-memory only */ }
+  };
+
+  // The pointer's x is turned into "how much of the row is to its RIGHT",
+  // because that is the Team column. Measuring the container every move keeps
+  // it correct if the window is resized mid-drag.
+  const pctFromEvent = (ev) => {
+    const box = columnsRef.current?.getBoundingClientRect();
+    if (!box || box.width === 0) return teamPct;
+    return ((box.right - ev.clientX) / box.width) * 100;
+  };
+
+  const startColumnResize = (e) => {
+    e.preventDefault();
+    setColumnResizing(true);
+    const onMove = (ev) => setTeamPct(clampTeamPct(pctFromEvent(ev)));
+    const onUp = (ev) => {
+      setColumnResizing(false);
+      setTeamPctPersisted(pctFromEvent(ev));
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.classList.remove("tfh-resizing");
+    };
+    document.body.classList.add("tfh-resizing");
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
   const [myView, setMyView] = useState("today");
   // "All Teams Collabs" is a mode of the Team Collabs column, not a fifth
   // per-member tab — it replaces the per-person blocks with one merged day
@@ -2894,7 +2951,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   const myViewTitle = MY_VIEWS.find((v) => v.id === myView)?.title || "My Collabs";
 
   const mineColumn = (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18, flex: "1 1 45%", minWidth: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18, flex: `1 1 ${100 - teamPct}%`, minWidth: 0 }}>
       <div className="tfh-card" style={{ padding: 18 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12.5, fontWeight: 700 }}>{myViewTitle}</span>
@@ -2977,7 +3034,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   // today, and what's coming up. Tasks and activity-log entries are merged
   // together in every tab, not shown as two separate lists.
   const teamColumn = (
-    <div style={{ flex: "1 1 53%", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+    <div className="tfh-team-column" style={{ flex: `1 1 ${teamPct}%`, minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, fontWeight: 700 }}>Team Collabs</span>
         <div style={{ display: "flex", gap: 4, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 9, padding: 3, flexWrap: "wrap" }}>
@@ -3111,8 +3168,25 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
       {/* Mine on the left (with totals nested underneath it), team on the
           right — reverses on mobile so mine reads first, matching the
           same top-to-bottom order as the desktop left-to-right layout. */}
-      <div className="tfh-dashboard-columns">
+      <div className="tfh-dashboard-columns" ref={columnsRef}>
         {mineColumn}
+        {/* Drag to move the split between the two columns. Same affordances
+            as the sidebar handle: double-click resets, arrow keys nudge it
+            for anyone without a pointer. */}
+        <div
+          className={`tfh-column-resizer ${columnResizing ? "active" : ""}`}
+          onMouseDown={startColumnResize}
+          onDoubleClick={() => setTeamPctPersisted(TEAM_COLUMN_DEFAULT_PCT)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") { e.preventDefault(); setTeamPctPersisted(teamPct + 3); }
+            if (e.key === "ArrowRight") { e.preventDefault(); setTeamPctPersisted(teamPct - 3); }
+          }}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the Team Collabs column"
+          tabIndex={0}
+          title="Drag to resize · double-click to reset"
+        />
         {teamColumn}
       </div>
 
@@ -3252,7 +3326,7 @@ const BoardView = ({ tasks, users, projects, onOpen, onComplete, onReopen, onAdd
           <option value="all">All projects</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        {canManage && <NewProjectButton onCreateProject={onCreateProject} />}
+        <NewProjectButton onCreateProject={onCreateProject} />
         <select className="tfh-input" style={{ width: "auto" }} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
           <option value="all">All tasks</option>
           <option value="urgent">Urgent only</option>
@@ -3379,6 +3453,94 @@ const PostEditor = ({ member, canEdit, onSave }) => {
   );
 };
 
+/* ------------------------------------------------------------------ */
+/* Work report — the whole team's record, or one person's, as a Word    */
+/* document on DAMC letterhead.                                         */
+/* ------------------------------------------------------------------ */
+// Everything is assembled server-side: the document has to carry every
+// comment, file, subtask and logged activity, and the browser only holds
+// what the current page happens to have fetched. Building it here would
+// quietly produce a report with things missing, which is worse than none.
+const ReportPanel = ({ workspaceId, users, projects, currentUser, canManage }) => {
+  // A plain member can only pull their own record, which the server enforces
+  // too — so their picker is fixed to themselves rather than showing options
+  // that would come back 403.
+  const [who, setWho] = useState(canManage ? "all" : currentUser.id);
+  const [scopeProject, setScopeProject] = useState("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState("");
+
+  const download = async () => {
+    setBusy(true); setError(""); setDone("");
+    try {
+      const { blob, fileName } = await api.downloadTeamReport(workspaceId, {
+        userId: who === "all" ? undefined : who,
+        projectId: scopeProject === "all" ? undefined : scopeProject,
+        from: from || undefined,
+        to: to || undefined,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = fileName;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      setDone(fileName);
+    } catch (err) {
+      setError(err.message || "Couldn't build the report.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="tfh-card" style={{ padding: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <FileText size={15} color="var(--accent)" />
+        <span style={{ fontSize: 13.5, fontWeight: 700 }}>Work report (Word)</span>
+      </div>
+      <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 14, lineHeight: 1.5 }}>
+        A full record on DAMC letterhead, project by project: every activity with its dates, times,
+        status, description, meeting notes, subtasks, comments, files and links — plus each person's
+        logged activities. Leave the dates empty for everything on record.
+      </div>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div style={{ minWidth: 190 }}>
+          <label className="tfh-label" htmlFor="tfh-report-who">Who</label>
+          <select id="tfh-report-who" className="tfh-input" style={{ fontSize: 12.5 }} value={who} onChange={(e) => setWho(e.target.value)} disabled={!canManage}>
+            {canManage && <option value="all">All team members</option>}
+            {(canManage ? users : users.filter((u) => u.id === currentUser.id)).map((u) => (
+              <option key={u.id} value={u.id}>{u.name}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ minWidth: 190 }}>
+          <label className="tfh-label" htmlFor="tfh-report-project">Project</label>
+          <select id="tfh-report-project" className="tfh-input" style={{ fontSize: 12.5 }} value={scopeProject} onChange={(e) => setScopeProject(e.target.value)}>
+            <option value="all">All projects</option>
+            {(projects || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        <div style={{ minWidth: 150 }}>
+          <label className="tfh-label">From (optional)</label>
+          <DateField value={from} onChange={setFrom} />
+        </div>
+        <div style={{ minWidth: 150 }}>
+          <label className="tfh-label">To (optional)</label>
+          <DateField value={to} onChange={setTo} />
+        </div>
+        <button className="tfh-btn tfh-btn-accent" onClick={download} disabled={busy} style={{ flexShrink: 0 }}>
+          <Download size={14} /> {busy ? "Building…" : "Download report"}
+        </button>
+      </div>
+      {error && <div style={{ fontSize: 12, color: "var(--pri-high)", marginTop: 10 }}>{error}</div>}
+      {done && <div style={{ fontSize: 12, color: "var(--stage-done)", marginTop: 10 }}>Saved {done}</div>}
+    </div>
+  );
+};
+
 const TeamView = ({ tasks, users, currentUser, onOpen, onSetRole, onSetTitle, onInvite, onRemoveMember, canManage, workspaceId, projects, onSetProjectLead }) => {
   const isAdmin = currentUser.role === "admin";
   const [inviteEmail, setInviteEmail] = useState("");
@@ -3470,6 +3632,11 @@ const TeamView = ({ tasks, users, currentUser, onOpen, onSetRole, onSetTitle, on
           {isAdmin ? " — you can assign the team lead, manage roles, and remove members." : " — only the admin can change roles."}
         </div>
       </div>
+
+      <ReportPanel
+        workspaceId={workspaceId} users={users} projects={projects}
+        currentUser={currentUser} canManage={canManage}
+      />
 
       {(() => {
         const lead = users.find((m) => m.role === "lead");
@@ -3842,7 +4009,11 @@ const CalendarView = ({ tasks, users, onOpen, workspaceId, canManage }) => {
 /* ------------------------------------------------------------------ */
 /* Files view — project-level reference documents, not tied to a task    */
 /* ------------------------------------------------------------------ */
-const DocumentRow = ({ doc, workspaceId, projectId, canManage, onRemove }) => {
+// Renders a project document, and — when `taskId` is set — a file attached
+// to one of the project's activities, fetched from the task-attachment
+// endpoint instead. Same row either way, because to the reader it is the
+// same thing: a file in this project.
+const DocumentRow = ({ doc, workspaceId, projectId, canManage, onRemove, taskId, sourceLabel }) => {
   const isImage = doc.mimeType.startsWith("image/");
   const sizeLabel = doc.sizeBytes > 1024 * 1024 ? `${(doc.sizeBytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(doc.sizeBytes / 1024))} KB`;
 
@@ -3857,7 +4028,9 @@ const DocumentRow = ({ doc, workspaceId, projectId, canManage, onRemove }) => {
       return;
     }
     try {
-      const url = await api.getDocumentBlobUrl(workspaceId, projectId, doc.id);
+      const url = taskId
+        ? await api.getAttachmentBlobUrl(workspaceId, projectId, taskId, doc.id)
+        : await api.getDocumentBlobUrl(workspaceId, projectId, doc.id);
       const a = document.createElement("a");
       a.href = url;
       if (isImage || doc.mimeType === "application/pdf") a.target = "_blank"; else a.download = doc.fileName;
@@ -3883,6 +4056,7 @@ const DocumentRow = ({ doc, workspaceId, projectId, canManage, onRemove }) => {
         <div style={{ fontSize: 13.5, fontWeight: 500, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.fileName}</div>
         <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
           {sizeLabel} · {doc.uploaderName || "Unknown"} · {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+          {sourceLabel && <span style={{ color: "var(--accent)" }}> · {sourceLabel}</span>}
           {doc.missing && <span style={{ color: "var(--pri-medium)", fontWeight: 600 }}> · file missing from storage</span>}
         </div>
       </button>
@@ -4663,20 +4837,30 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
   // department's reference material already lives in Google Drive. Links
   // sit alongside the uploads rather than in a separate place.
   const [links, setLinks] = useState([]);
+  // Files and links that came in through an activity rather than being
+  // uploaded here. They're listed separately so it's clear where each one
+  // came from, but they ARE on this page — uploading a file to an activity
+  // and then not finding it under Files is what prompted this.
+  const [taskFiles, setTaskFiles] = useState([]);
+  const [taskLinks, setTaskLinks] = useState([]);
 
-  const load = async () => {
-    setLoading(true);
+  // `quiet` skips the loading state: a socket-driven refresh shouldn't blank
+  // the page someone is reading.
+  const load = async (quiet = false) => {
+    if (!quiet) setLoading(true);
     try {
-      const [{ documents }, { links: rows }] = await Promise.all([
+      const [docs, { links: rows }] = await Promise.all([
         api.getDocuments(workspaceId, selectedId),
         api.getProjectLinks(workspaceId, selectedId),
       ]);
-      setItems(documents);
+      setItems(docs.documents);
+      setTaskFiles(docs.taskFiles || []);
+      setTaskLinks(docs.taskLinks || []);
       setLinks(rows);
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
@@ -4720,6 +4904,21 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
   };
 
   useEffect(() => { if (selectedId) load(); }, [workspaceId, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch-once was the bug: a file uploaded from an activity (or by someone
+  // else, in another tab) never appeared here until a manual reload. The
+  // server broadcasts documents:changed on every file and link change
+  // anywhere in the project, including from tasks.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket || !selectedId) return undefined;
+    const onDocumentsChanged = (payload) => {
+      if (payload?.projectId && payload.projectId !== selectedId) return;
+      load(true);
+    };
+    socket.on("documents:changed", onDocumentsChanged);
+    return () => socket.off("documents:changed", onDocumentsChanged);
+  }, [workspaceId, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFiles = async (fileList) => {
     const files = Array.from(fileList || []);
@@ -4808,7 +5007,7 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
 
       {loading ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 30, justifyContent: "center" }}><Spinner /> <span style={{ fontSize: 13, color: "var(--text-dim)" }}>Loading files…</span></div>
-      ) : items.length === 0 ? (
+      ) : items.length === 0 && taskFiles.length === 0 ? (
         <div className="tfh-card" style={{ padding: 30, textAlign: "center" }}>
           <FolderOpen size={22} color="var(--text-faint)" style={{ marginBottom: 8 }} />
           <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
@@ -4821,6 +5020,39 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {items.map((doc) => (
             <DocumentRow key={doc.id} doc={doc} workspaceId={workspaceId} projectId={selectedId} canManage={canManage} onRemove={() => remove(doc.id)} />
+          ))}
+        </div>
+      )}
+
+      {/* Files that arrived through an activity. Read-only here: they belong
+          to the activity that carries them, and removing one from under it
+          would leave that activity pointing at nothing. */}
+      {!loading && (taskFiles.length > 0 || taskLinks.length > 0) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+            <Paperclip size={14} color="var(--accent)" />
+            <span style={{ fontSize: 13, fontWeight: 700 }}>From activities</span>
+            <span className="tfh-chip" style={{ fontSize: 10, background: "var(--raised)", color: "var(--text-dim)" }}>{taskFiles.length + taskLinks.length}</span>
+            <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Uploaded against a collab in this project</span>
+          </div>
+          {taskFiles.map((f) => (
+            <DocumentRow
+              key={f.id} doc={f} workspaceId={workspaceId} projectId={selectedId}
+              taskId={f.taskId} sourceLabel={f.taskTitle} canManage={false} onRemove={() => {}}
+            />
+          ))}
+          {taskLinks.map((l) => (
+            <div key={l.id} className="tfh-card" style={{ padding: 14, display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 38, height: 38, borderRadius: 9, background: "var(--raised)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <Link2 size={16} color="var(--text-faint)" />
+              </div>
+              <a href={l.url} target="_blank" rel="noreferrer" style={{ flex: 1, minWidth: 0, textDecoration: "none" }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.label || l.url}</div>
+                <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
+                  {l.adderName || "Unknown"} · <span style={{ color: "var(--accent)" }}>{l.taskTitle}</span>
+                </div>
+              </a>
+            </div>
           ))}
         </div>
       )}
@@ -5964,6 +6196,14 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 0.5, padding: "0 10px", marginBottom: 4 }}>Projects</div>
+      {/* New project sits ABOVE the list and is visible whether or not the
+          list is expanded — buried under a collapsed list it was effectively
+          hidden. Open to every member now, not just managers: anyone can
+          start a piece of work. Renaming, reordering and deleting stay with
+          managers. */}
+      <div style={{ padding: "0 4px 6px" }}>
+        <NewProjectButton onCreateProject={onCreateProject} />
+      </div>
       {/* The full project list was pushing everything else out of the
           sidebar once there were a dozen or more, so it now lives behind
           "All projects": the row selects the all-projects filter AND opens
@@ -6023,11 +6263,7 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
           ))}
         </>
       )}
-      {expanded && canManage && (
-        <div style={{ padding: "6px 10px 0" }}>
-          <NewProjectButton onCreateProject={onCreateProject} />
-        </div>
-      )}
+
     </div>
   );
 };

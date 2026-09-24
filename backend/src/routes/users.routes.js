@@ -20,9 +20,14 @@ const publicUser = (u) => ({
 router.get("/:userId/avatar", authenticate, async (req, res, next) => {
   try {
     const user = await getUserById(req.params.userId);
-    if (!user || !user.avatarPath || !fs.existsSync(user.avatarPath)) {
-      return res.status(404).json({ error: "No avatar set" });
-    }
+    if (!user) return res.status(404).json({ error: "User not found" });
+    // "This person has no photo" is a normal answer, not a failure — 204,
+    // not 404. A 404 here made the browser log a red console error for every
+    // avatar on the page (and there are a lot of them), which buried real
+    // errors. It happens constantly because an uploaded avatar's FILE is
+    // wiped on every redeploy while avatar_path stays in the database — the
+    // same ephemeral-storage problem documented in CLAUDE.md.
+    if (!user.avatarPath || !fs.existsSync(user.avatarPath)) return res.status(204).end();
     res.setHeader("Content-Type", "image/*");
     fs.createReadStream(user.avatarPath).pipe(res);
   } catch (err) { next(err); }

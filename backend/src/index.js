@@ -15,6 +15,7 @@ const tasksRoutes = require("./routes/tasks.routes");
 const notificationsRoutes = require("./routes/notifications.routes");
 const analyticsRoutes = require("./routes/analytics.routes");
 const activityRoutes = require("./routes/activity.routes");
+const reportsRoutes = require("./routes/reports.routes");
 
 const PORT = process.env.PORT || 4000;
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
@@ -25,10 +26,28 @@ if (!process.env.JWT_SECRET) {
 }
 
 const app = express();
-app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
+// exposedHeaders matters for the Word report: a cross-origin fetch can only
+// read the headers named here, so without Content-Disposition the browser
+// saves the report under a generic name instead of the one the server set.
+app.use(cors({ origin: CORS_ORIGIN, credentials: true, exposedHeaders: ["Content-Disposition"] }));
 app.use(express.json());
 
-app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+// `build` answers the question "is the server I am talking to the one I just
+// updated?" — which is otherwise unanswerable from outside, and was the cause
+// of a long hunt for a 404 that turned out to be an older `node` process still
+// holding port 4000 from another terminal. Bump BUILD when shipping a change
+// whose absence would be confusing.
+const BUILD = "2026-09-24 reports";
+app.get("/api/health", (req, res) =>
+  res.json({
+    ok: true,
+    build: BUILD,
+    // The features a client can check for directly rather than guessing from
+    // a 404.
+    reports: true,
+    time: new Date().toISOString(),
+  })
+);
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", usersRoutes);
@@ -37,6 +56,7 @@ app.use("/api/workspaces/:workspaceId/projects", projectsRoutes);
 app.use("/api/workspaces/:workspaceId/projects/:projectId/tasks", tasksRoutes);
 app.use("/api/workspaces/:workspaceId/projects/:projectId/analytics", analyticsRoutes);
 app.use("/api/workspaces/:workspaceId/activity-log", activityRoutes);
+app.use("/api/workspaces/:workspaceId/reports", reportsRoutes);
 app.use("/api/notifications", notificationsRoutes);
 
 app.use((err, req, res, next) => {

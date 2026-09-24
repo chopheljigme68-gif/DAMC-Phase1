@@ -252,6 +252,37 @@ export const api = {
     return URL.createObjectURL(blob);
   },
 
+  // The Word report. Comes back as bytes, not JSON, and the server picks the
+  // filename — which is read back out of Content-Disposition so the download
+  // is named the same thing the server called it.
+  downloadTeamReport: async (workspaceId, { userId, projectId, from, to } = {}) => {
+    const params = new URLSearchParams();
+    if (userId) params.set("userId", userId);
+    if (projectId) params.set("projectId", projectId);
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    const query = params.toString();
+    const res = await fetch(`${API_URL}/api/workspaces/${workspaceId}/reports/team.docx${query ? `?${query}` : ""}`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    if (!res.ok) {
+      // A JSON body means the endpoint ran and refused for a reason worth
+      // showing. A NON-JSON 404 means the request never reached the report
+      // route at all — nearly always a backend still running the previous
+      // build — so say that instead of a bare status code nobody can act on.
+      let message = null;
+      try { message = (await res.json()).error; } catch { /* not JSON */ }
+      if (message) throw new Error(message);
+      if (res.status === 404) {
+        throw new Error("The server has no report endpoint yet — the backend is still running the previous build. Run npm install in backend/ and restart it.");
+      }
+      throw new Error(`Report failed (${res.status})`);
+    }
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = /filename="([^"]+)"/.exec(disposition);
+    return { blob: await res.blob(), fileName: match ? match[1] : "DAMC-Report.docx" };
+  },
+
   getNotifications: () => request("/notifications"),
   markNotificationRead: (id) => request(`/notifications/${id}/read`, { method: "PATCH" }),
   markAllRead: () => request("/notifications/read-all", { method: "PATCH" }),
@@ -269,12 +300,16 @@ export const api = {
     if (!res.ok) throw new Error(data?.error || `Upload failed (${res.status})`);
     return data;
   },
+  // Returns null when the person simply has no photo (the server answers 204
+  // for that), rather than throwing — "no photo" is not an error.
   getAvatarBlobUrl: async (userId) => {
     const res = await fetch(`${API_URL}/api/users/${userId}/avatar`, {
       headers: { Authorization: `Bearer ${getToken()}` },
     });
+    if (res.status === 204) return null;
     if (!res.ok) throw new Error(`No avatar (${res.status})`);
     const blob = await res.blob();
+    if (!blob.size) return null;
     return URL.createObjectURL(blob);
   },
 };

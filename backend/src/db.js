@@ -1141,6 +1141,39 @@ async function deleteDocument(id) {
   return doc;
 }
 
+// Everything attached to a task inside this project, so the Files page can
+// show it alongside the project's own reference documents. Uploading a file
+// to an activity and then not finding it under Files was reported as "files
+// don't show up"; they were never there to begin with.
+async function getTaskFilesForProject(projectId) {
+  const { rows } = await pool.query(
+    `SELECT a.id, a.task_id AS "taskId", t.title AS "taskTitle", a.file_name AS "fileName",
+            a.mime_type AS "mimeType", a.size_bytes AS "sizeBytes", a.storage_path AS "storagePath",
+            a.created_at AS "createdAt", a.uploaded_by AS "uploadedBy", u.name AS "uploaderName"
+     FROM task_attachments a
+     JOIN tasks t ON t.id = a.task_id
+     LEFT JOIN users u ON u.id = a.uploaded_by
+     WHERE t.project_id = $1
+     ORDER BY a.created_at DESC`,
+    [projectId]
+  );
+  return rows;
+}
+
+async function getTaskLinksForProject(projectId) {
+  const { rows } = await pool.query(
+    `SELECT l.id, l.task_id AS "taskId", t.title AS "taskTitle", l.label, l.url,
+            l.created_at AS "createdAt", l.added_by AS "addedBy", u.name AS "adderName"
+     FROM task_links l
+     JOIN tasks t ON t.id = l.task_id
+     LEFT JOIN users u ON u.id = l.added_by
+     WHERE t.project_id = $1
+     ORDER BY l.created_at DESC`,
+    [projectId]
+  );
+  return rows;
+}
+
 /* ==================== task links (external URLs) ==================== */
 
 const LINK_SELECT = `
@@ -1482,7 +1515,9 @@ module.exports = {
   getCommentsForTask, addComment,
   getLinksForTask, addLink, getLinkById, deleteLink,
   getLinksForProject, addProjectLink, getProjectLinkById, deleteProjectLink,
-  getDocumentsForProject, getDocumentById, addDocument, deleteDocument,
+  getDocumentsForProject,
+  getTaskFilesForProject,
+  getTaskLinksForProject, getDocumentById, addDocument, deleteDocument,
   getHolidays, addHoliday, deleteHoliday, getHolidayById,
   getActivityLogsForUser, getTeamActivityLogs, upsertActivityLog, getActivityLogById, getActivityLogWithContent, getActivityLogByDate,
   getCommentsForActivityLog, addActivityLogComment, getActivityLogCommentById, deleteActivityLogComment,

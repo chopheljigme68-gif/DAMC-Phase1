@@ -7,11 +7,12 @@ const {
   addMilestoneLink, deleteMilestoneLink,
   getAttachmentsForMilestone, getMilestoneAttachmentById, addMilestoneAttachment, deleteMilestoneAttachment,
   getDocumentsForProject, getDocumentById, addDocument, deleteDocument,
+  getTaskFilesForProject, getTaskLinksForProject,
   getLinksForProject, addProjectLink, getProjectLinkById, deleteProjectLink,
 } = require("../db");
 const { authenticate } = require("../auth");
 const { requireWorkspaceMember, requireRole, requireProjectInWorkspace, requireProjectManager } = require("../middleware/workspace");
-const { broadcastProjectsChanged } = require("../utils/notify");
+const { broadcastProjectsChanged, broadcastDocumentsChanged } = require("../utils/notify");
 const { projectUpload, milestoneUpload } = require("../utils/upload");
 
 const router = express.Router({ mergeParams: true });
@@ -23,7 +24,10 @@ router.get("/", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post("/", requireRole("admin", "lead"), async (req, res, next) => {
+// Open to every workspace member, deliberately: anyone can start a piece of
+// work. Reordering, renaming and deleting a project stay manager-only below,
+// because those change or destroy shared structure.
+router.post("/", requireRole("admin", "lead", "member"), async (req, res, next) => {
   try {
     const { name, description, deadline, startDate, memberIds } = req.body || {};
     if (!name || !name.trim()) return res.status(400).json({ error: "Project name is required" });
@@ -300,8 +304,19 @@ router.get("/:projectId/documents", requireProjectInWorkspace, async (req, res, 
     // row survives, the file doesn't. Reporting it here is what lets the UI
     // show a file as unavailable instead of appearing to do nothing when
     // someone clicks it, which is exactly how this was first reported.
+    // Files attached to this project's ACTIVITIES ride along in the same
+    // response. To the person who uploaded one it is simply "a file in this
+    // project"; keeping them in their own array lets the page still say
+    // which activity each came from.
+    const [taskFiles, taskLinks] = await Promise.all([
+      getTaskFilesForProject(req.params.projectId),
+      getTaskLinksForProject(req.params.projectId),
+    ]);
+    const withPresence = (d) => ({ ...d, missing: !d.storagePath || !fs.existsSync(d.storagePath) });
     res.json({
-      documents: documents.map((d) => ({ ...d, missing: !d.storagePath || !fs.existsSync(d.storagePath) })),
+      documents: documents.map(withPresence),
+      taskFiles: taskFiles.map(withPresence),
+      taskLinks,
     });
   } catch (err) { next(err); }
 });
@@ -323,6 +338,7 @@ router.post("/:projectId/documents", requireProjectInWorkspace, requireProjectMa
       storagePath: req.file.path,
     });
     broadcastProjectsChanged(req.params.workspaceId);
+    broadcastDocumentsChanged(req.params.workspaceId, req.params.projectId);
     res.status(201).json({ document });
   } catch (err) { next(err); }
 });
@@ -346,6 +362,7 @@ router.delete("/:projectId/documents/:documentId", requireProjectInWorkspace, re
       fs.unlink(doc.storagePath, () => {});
     }
     broadcastProjectsChanged(req.params.workspaceId);
+    broadcastDocumentsChanged(req.params.workspaceId, req.params.projectId);
     res.status(204).end();
   } catch (err) { next(err); }
 });

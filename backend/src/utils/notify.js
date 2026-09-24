@@ -17,6 +17,12 @@ function broadcastTaskChange(workspaceId, payload) {
   } catch (err) {
     // ignore if socket layer isn't up
   }
+  // A file or link on a task is also a change to what the Files page shows,
+  // and it is raised here rather than at each of the eight call sites so a
+  // future one can't forget it.
+  if ((payload?.reason === "attachment" || payload?.reason === "link") && payload?.projectId) {
+    broadcastDocumentsChanged(workspaceId, payload.projectId);
+  }
 }
 
 function broadcastLeadChange(workspaceId, leadId) {
@@ -63,4 +69,16 @@ function broadcastActivityChanged(workspaceId, logId) {
   }
 }
 
-module.exports = { notify, broadcastTaskChange, broadcastLeadChange, broadcastMemberAdded, broadcastProjectsChanged, broadcastActivityComment, broadcastActivityChanged };
+// A file or link was added or removed anywhere inside a project — a project
+// document, or a file attached to one of its activities. The Files page
+// shows both, and it used to load once on mount, so a file uploaded from a
+// task simply never appeared there until a manual reload.
+function broadcastDocumentsChanged(workspaceId, projectId) {
+  try {
+    getIO().to(`workspace:${workspaceId}`).emit("documents:changed", { workspaceId, projectId });
+  } catch (err) {
+    console.error("documents:changed broadcast failed:", err.message);
+  }
+}
+
+module.exports = { notify, broadcastTaskChange, broadcastLeadChange, broadcastMemberAdded, broadcastProjectsChanged, broadcastActivityComment, broadcastActivityChanged, broadcastDocumentsChanged };
