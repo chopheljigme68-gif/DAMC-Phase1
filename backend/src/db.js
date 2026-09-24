@@ -578,6 +578,10 @@ const TASK_SELECT = `
   SELECT
     t.id, t.title, t.description, t.meeting_notes AS "meetingNotes", t.status, t.priority,
     t.assignee_id AS "assigneeId", t.created_by AS "createdBy",
+    -- Who gave you this piece of work. Surfaced because a task can be
+    -- created by any team member, and "who asked me to do this?" was
+    -- unanswerable from the board without opening the record.
+    MAX(cu.name) AS "createdByName",
     t.workspace_id AS "workspaceId", t.project_id AS "projectId", MAX(p.name) AS "projectName",
     to_char(t.due, 'YYYY-MM-DD') AS due,
     to_char(t.due_time, 'HH24:MI') AS "dueTime",
@@ -602,6 +606,7 @@ const TASK_SELECT = `
     (SELECT cu.name FROM task_comments tc JOIN users cu ON cu.id = tc.user_id WHERE tc.task_id = t.id ORDER BY tc.created_at DESC LIMIT 1) AS "lastCommentAuthor"
   FROM tasks t
   LEFT JOIN projects p ON p.id = t.project_id
+  LEFT JOIN users cu ON cu.id = t.created_by
   LEFT JOIN subtasks s ON s.task_id = t.id
 `;
 

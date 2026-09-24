@@ -447,7 +447,13 @@ function activityBlock(task) {
 
   if (task.dueTime) rows.push(kv("Time", fmtTimeRange(task.dueTime, task.endTime)));
   rows.push(kv("Assigned to", task.assigneeName || "Unassigned"));
-  rows.push(kv("Created by", `${task.createdByName || "—"} on ${fmtTimestamp(task.createdAt)}`));
+  // Reads "Assigned by" when someone else handed this over, "Created by"
+  // when it is the person's own entry — the same distinction the dashboard
+  // makes, so the document and the screen say the same thing.
+  rows.push(kv(
+    task.createdByName && task.createdByName !== task.assigneeName ? "Assigned by" : "Created by",
+    `${task.createdByName || "—"} on ${fmtTimestamp(task.createdAt)}`
+  ));
   if (task.completedAt) {
     const timing = completionTiming(task);
     rows.push(kv(

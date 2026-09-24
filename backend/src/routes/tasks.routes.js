@@ -196,14 +196,15 @@ router.patch("/:id", async (req, res, next) => {
     const existing = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!existing) return res.status(404).json({ error: "Task not found" });
 
-    // Members get real editing rights on their OWN assigned task — anything
-    // else (someone else's task) stays view + comment only. Reassignment is
-    // deliberately excluded even on your own task — handing work to someone
-    // else is a management decision, not a "edit my own task" one.
+    // A member may edit a task that is THEIRS — either assigned to them or
+    // created by them. Anything that is neither (work between two other
+    // people) stays view + comment only. Reassignment is still excluded even
+    // on your own task: handing work to someone else is a management
+    // decision, not an "edit my own task" one.
     const manager = isManager(req);
-    const isOwnTask = existing.assigneeId === req.user.id;
+    const isOwnTask = existing.assigneeId === req.user.id || existing.createdBy === req.user.id;
     if (!manager && !isOwnTask) {
-      return res.status(403).json({ error: "You can only edit tasks assigned to you" });
+      return res.status(403).json({ error: "You can only edit a task assigned to you or one you created" });
     }
     if (!manager && req.body.assigneeId !== undefined && req.body.assigneeId !== existing.assigneeId) {
       return res.status(403).json({ error: "Only the workspace admin, team lead, or this project's lead can reassign a task" });
@@ -329,9 +330,17 @@ router.put("/:id/subtasks", async (req, res, next) => {
 
 router.delete("/:id", async (req, res, next) => {
   try {
-    if (!isManager(req)) return res.status(403).json({ error: "Only the workspace admin or team lead can delete tasks" });
+    // 404 before 403 deliberately: whether a task exists in a project you
+    // can already see is not a secret, and checking permission against a
+    // task we haven't loaded would mean guessing.
     const existing = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!existing) return res.status(404).json({ error: "Task not found" });
+    // Same boundary as editing: yours to delete if it is assigned to you or
+    // you created it. A member cannot delete work that belongs to two other
+    // people, which is the case this rule exists to protect.
+    if (!isManager(req) && existing.assigneeId !== req.user.id && existing.createdBy !== req.user.id) {
+      return res.status(403).json({ error: "You can only delete a task assigned to you or one you created" });
+    }
     // Deleting one occurrence has to STICK. The generator fills in missing
     // dates for a series, so without recording this date as an exception
     // the next sweep would put the task straight back — which is exactly

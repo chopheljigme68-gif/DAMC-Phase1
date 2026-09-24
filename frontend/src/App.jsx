@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import {
   LayoutDashboard, SquareKanban, Users, CalendarDays, Search, Plus, X, Check,
@@ -321,6 +321,12 @@ const Logo = ({ size = 30 }) => (
   <img src="/logo.png" alt="PMDAMC" style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }} />
 );
 
+// Who is looking at the screen. A context rather than a prop because
+// "assigned by" appears on rows rendered from half a dozen places, and
+// threading the viewer's id through every one of them would be the kind of
+// change that gets forgotten in exactly one spot.
+const ViewerContext = React.createContext(null);
+
 // Shared across all <Avatar> instances so the same person's photo is only
 // fetched once per session, however many task cards/avatars show them.
 const avatarUrlCache = new Map();
@@ -459,6 +465,7 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
             <Paperclip size={10} /> {task.attachmentCount}
           </span>
         )}
+        <AssignedByChip task={task} />
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: 11.5, color: isDone ? "var(--accent)" : meta.tone, fontWeight: 500 }}>{meta.label}</span>
@@ -1467,10 +1474,14 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
   // reassigning it to someone else stays manager-only even then (see
   // canChangeAssignee below), and a task NOT assigned to you stays view +
   // comment only, matching what was asked to stay unchanged.
-  const isOwnTask = draft.id && draft.assigneeId === currentUserId;
+  // "Mine" now means assigned to me OR created by me. A member can edit and
+  // delete either; work that is neither — between two other people — stays
+  // view + comment only, so nobody can quietly delete someone else's record.
+  const isOwnTask = Boolean(draft.id) && (draft.assigneeId === currentUserId || draft.createdBy === currentUserId);
   const canEditFields = !draft.id || canManage || isOwnTask;
   const canAttach = canManage || isOwnTask;
   const canChangeAssignee = !draft.id || canManage;
+  const canDelete = Boolean(draft.id) && (canManage || isOwnTask);
 
   const addSubtask = (fields) => {
     setDraft({ ...draft, subtasks: [...draft.subtasks, { id: `local-${Date.now()}`, done: false, attachmentCount: 0, linkCount: 0, ...fields }] });
@@ -1488,9 +1499,22 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
           <button className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
 
-        {!canManage && (
+        {/* Who gave you this piece of work. First thing in the dialog,
+            because "who asked me to do this?" is the question people open a
+            task to answer. Absent when you created it yourself. */}
+        {draft.id && draft.createdByName && draft.createdBy !== currentUserId && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--text)", background: "var(--accent-soft)", padding: "9px 12px", borderRadius: 10, marginBottom: 14 }}>
+            <UserPlus size={13} color="var(--accent)" />
+            <span>Assigned by <strong>{draft.createdByName}</strong></span>
+          </div>
+        )}
+
+        {/* The lock notice follows what you can actually DO, not your role —
+            a member editing their own task used to be told it was view-only
+            while every field was editable. */}
+        {!canEditFields && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-dim)", background: "var(--raised)", padding: "9px 12px", borderRadius: 10, marginBottom: 14 }}>
-            <Lock size={13} /> View only — you can comment below, but only your admin, team lead, or this project's lead can edit or move this task.
+            <Lock size={13} /> View only — you can comment below. This task is neither assigned to you nor created by you, so only its owner, your admin, team lead, or this project's lead can change it.
           </div>
         )}
 
@@ -1644,7 +1668,7 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
         )}
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid var(--line)", paddingTop: 16, marginTop: saveError ? 0 : undefined }}>
-          {draft.id && canManage ? <DeleteButton onConfirm={() => onDelete(draft.id)} /> : <span />}
+          {canDelete ? <DeleteButton onConfirm={() => onDelete(draft.id)} /> : <span />}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
             {/* Mark complete — the old Stage dropdown, as a tick. Sits with
                 the footer actions because that's the moment you reach for
@@ -2337,7 +2361,11 @@ const mergeAgenda = (tasksToday, logEntry, author) => {
     ...tasksToday.map((t) => ({ time: t.dueTime || null, endTime: t.endTime || null, label: t.title, kind: "task", task: t })),
     ...activityItemsFrom(logEntry, author),
   ];
-  const timed = items.filter((i) => i.time).sort((a, b) => a.time.localeCompare(b.time));
+  // Latest first, by the Chief's instruction: the evening's work sits at the
+  // top of the day's card and the morning's at the bottom. Only THIS list is
+  // reversed — Upcoming and Pending still read forwards, because those are
+  // about what is coming rather than what has happened.
+  const timed = items.filter((i) => i.time).sort((a, b) => b.time.localeCompare(a.time));
   const untimed = items.filter((i) => !i.time);
   return [...timed, ...untimed];
 };
@@ -2371,6 +2399,25 @@ const buildUpcomingItems = (upcomingTasks, dateTone) =>
     time: t.dueTime || null, endTime: t.endTime || null,
     kind: "task", task: t, dateTone,
   }));
+
+// "Assigned by <name>" — deliberately absent when you created the task
+// yourself, and absent when we don't know who did (older rows created before
+// the column was surfaced).
+const AssignedByChip = ({ task }) => {
+  const viewerId = useContext(ViewerContext);
+  if (!task?.createdBy || !viewerId) return null;
+  if (task.createdBy === viewerId) return null;
+  if (!task.createdByName) return null;
+  return (
+    <span
+      className="tfh-chip"
+      style={{ fontSize: 9.5, background: "var(--raised)", color: "var(--text-dim)", whiteSpace: "nowrap" }}
+      title={`${task.createdByName} created this task`}
+    >
+      <UserPlus size={9} /> by {task.createdByName}
+    </span>
+  );
+};
 
 const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
   // Both kinds of row are clickable now: a task opens the task dialog, a
@@ -2419,6 +2466,10 @@ const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
           {item.label}
         </span>
         {item.kind === "task" && <PriorityChip level={item.task.priority} />}
+        {/* Who gave you this. Shown ONLY when someone else created it — a
+            task you entered yourself needs no attribution, and printing
+            "Assigned by you" on every row is noise. */}
+        {item.kind === "task" && <AssignedByChip task={item.task} />}
         {item.kind === "activity" && <ActivityStatusChip status={item.status} />}
         {/* An activity carrying extra detail advertises it, so it's obvious
             there's something behind the click rather than a dead row. */}
@@ -6615,7 +6666,10 @@ function Workspace() {
         // minus assigneeId — reassigning stays manager-only even then.
         // Anyone else shouldn't reach this path at all (fields are locked
         // client-side and the server rejects it regardless).
-        const isOwnTask = draft.assigneeId === user.id;
+        // Same definition as the dialog uses to unlock the fields: yours if
+        // it is assigned to you or you created it. If these two ever drift
+        // apart, a member gets an editable form whose save is refused.
+        const isOwnTask = draft.assigneeId === user.id || draft.createdBy === user.id;
         const patch = canManage
           ? { title: draft.title, description: draft.description, meetingNotes: draft.meetingNotes || "", status: draft.status, priority: draft.priority, assigneeId: draft.assigneeId, due: draft.due, dueTime: draft.dueTime || null, endTime: draft.endTime || null }
           : isOwnTask
@@ -6800,6 +6854,7 @@ function Workspace() {
     .filter((n) => projectId || n.id === "dashboard" || n.id === "team" || n.id === "activity" || n.id === "board");
 
   return (
+    <ViewerContext.Provider value={user.id}>
     <div style={{ display: "flex", minHeight: "100vh" }}>
       {/* Sidebar */}
       <div
@@ -7012,6 +7067,7 @@ function Workspace() {
       {draft && <TaskDialog draft={draft} setDraft={setDraft} users={users} projects={projects} onClose={closeDialog} onSave={saveDraft} onDelete={deleteTask} saving={saving} saveError={saveError} uploadPhase={uploadPhase} isWorkspaceManager={canManage} workspaceId={currentId} currentUserId={user.id} />}
       {bulkAddOpen && <BulkAddModal users={users} projects={projects} currentProjectId={projectId} currentUserId={user.id} onClose={() => setBulkAddOpen(false)} onSubmit={bulkAddTasks} />}
     </div>
+    </ViewerContext.Provider>
   );
 }
 
