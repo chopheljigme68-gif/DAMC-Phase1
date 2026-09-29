@@ -2,8 +2,13 @@ const { pool } = require("./pool");
 
 /* ==================== users ==================== */
 
+// avatar_data is deliberately NOT in this list: it's the raw image bytes and
+// this projection is loaded on every authenticated request. `hasAvatar` is
+// the cheap boolean every caller actually needs.
 const USER_COLUMNS = `id, name, email, password_hash AS "passwordHash", color, initials,
-  is_platform_admin AS "isPlatformAdmin", avatar_path AS "avatarPath", default_title AS "defaultTitle", created_at AS "createdAt"`;
+  is_platform_admin AS "isPlatformAdmin", avatar_path AS "avatarPath", avatar_mime AS "avatarMime",
+  (avatar_data IS NOT NULL OR avatar_path IS NOT NULL) AS "hasAvatar",
+  default_title AS "defaultTitle", created_at AS "createdAt"`;
 
 async function getUserById(id) {
   const { rows } = await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [id]);
@@ -47,12 +52,28 @@ async function ensurePlatformAdminFromEnv(user) {
   return user;
 }
 
-async function updateUserAvatar(userId, avatarPath) {
-  const { rows } = await pool.query(`UPDATE users SET avatar_path = $1 WHERE id = $2 RETURNING ${USER_COLUMNS}`, [avatarPath, userId]);
+// The bytes go in the row. avatar_path is cleared at the same time so a
+// stale file on a disk that may not survive the next restart can never be
+// served in preference to what we hold.
+async function updateUserAvatar(userId, data, mimeType) {
+  const { rows } = await pool.query(
+    `UPDATE users SET avatar_data = $1, avatar_mime = $2, avatar_path = NULL WHERE id = $3 RETURNING ${USER_COLUMNS}`,
+    [data, mimeType || "image/png", userId]
+  );
   return rows[0];
 }
 
 /* ==================== password resets ==================== */
+
+// Reading the bytes is its own query, so the image is only ever loaded when
+// someone is actually looking at it.
+async function getUserAvatar(userId) {
+  const { rows } = await pool.query(
+    `SELECT avatar_data AS "data", avatar_mime AS "mime", avatar_path AS "path" FROM users WHERE id = $1`,
+    [userId]
+  );
+  return rows[0] || null;
+}
 
 async function createPasswordReset({ userId, tokenHash, expiresAt }) {
   await pool.query(
@@ -157,7 +178,7 @@ async function getMembership(workspaceId, userId) {
 async function getWorkspaceMembers(workspaceId) {
   const { rows } = await pool.query(
     `SELECT u.id, u.name, u.email, u.color, u.initials,
-            CASE WHEN u.avatar_path IS NOT NULL THEN '/api/users/' || u.id || '/avatar' ELSE NULL END AS "avatarUrl",
+            CASE WHEN u.avatar_data IS NOT NULL OR u.avatar_path IS NOT NULL THEN '/api/users/' || u.id || '/avatar' ELSE NULL END AS "avatarUrl",
             wm.title, wm.role
      FROM workspace_members wm
      JOIN users u ON u.id = wm.user_id
@@ -385,7 +406,7 @@ async function getOrCreateGeneralProject(workspaceId, createdBy) {
 async function getProjectMembers(projectId) {
   const { rows } = await pool.query(
     `SELECT u.id, u.name, u.color, u.initials,
-            CASE WHEN u.avatar_path IS NOT NULL THEN '/api/users/' || u.id || '/avatar' ELSE NULL END AS "avatarUrl",
+            CASE WHEN u.avatar_data IS NOT NULL OR u.avatar_path IS NOT NULL THEN '/api/users/' || u.id || '/avatar' ELSE NULL END AS "avatarUrl",
             wm.title, wm.role, pm.added_at AS "addedAt"
      FROM project_members pm
      JOIN users u ON u.id = pm.user_id
@@ -577,7 +598,8 @@ async function deleteMilestoneAttachment(id) {
 const TASK_SELECT = `
   SELECT
     t.id, t.title, t.description, t.meeting_notes AS "meetingNotes", t.status, t.priority,
-    t.assignee_id AS "assigneeId", t.created_by AS "createdBy",
+    t.assignee_id AS "assigneeId", t.assignee_2_id AS "assignee2Id", MAX(a2.name) AS "assignee2Name",
+    t.created_by AS "createdBy",
     -- Who gave you this piece of work. Surfaced because a task can be
     -- created by any team member, and "who asked me to do this?" was
     -- unanswerable from the board without opening the record.
@@ -607,6 +629,7 @@ const TASK_SELECT = `
   FROM tasks t
   LEFT JOIN projects p ON p.id = t.project_id
   LEFT JOIN users cu ON cu.id = t.created_by
+  LEFT JOIN users a2 ON a2.id = t.assignee_2_id
   LEFT JOIN subtasks s ON s.task_id = t.id
 `;
 
@@ -645,12 +668,12 @@ async function createTask(data) {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `INSERT INTO tasks (title, description, meeting_notes, status, priority, assignee_id, created_by, due, due_time, end_time, workspace_id, project_id, recurrence, recurrence_parent_id, completed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CASE WHEN $4 = 'done' THEN now() ELSE NULL END)
+      `INSERT INTO tasks (title, description, meeting_notes, status, priority, assignee_id, assignee_2_id, created_by, due, due_time, end_time, workspace_id, project_id, recurrence, recurrence_parent_id, completed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CASE WHEN $4 = 'done' THEN now() ELSE NULL END)
        RETURNING id`,
       [
         data.title, data.description || "", data.meetingNotes || "", data.status || "todo", data.priority || "medium",
-        data.assigneeId, data.createdBy || null, data.due || null, data.dueTime || null, data.endTime || null,
+        data.assigneeId, data.assignee2Id || null, data.createdBy || null, data.due || null, data.dueTime || null, data.endTime || null,
         data.workspaceId, data.projectId,
         data.recurrence ? JSON.stringify(data.recurrence) : null, data.recurrenceParentId || null,
       ]
@@ -690,7 +713,7 @@ async function updateTask(id, patch) {
   const fields = [];
   const values = [];
   let i = 1;
-  const columnMap = { title: "title", description: "description", meetingNotes: "meeting_notes", status: "status", priority: "priority", assigneeId: "assignee_id", due: "due", dueTime: "due_time", endTime: "end_time", projectId: "project_id" };
+  const columnMap = { title: "title", description: "description", meetingNotes: "meeting_notes", status: "status", priority: "priority", assigneeId: "assignee_id", assignee2Id: "assignee_2_id", due: "due", dueTime: "due_time", endTime: "end_time", projectId: "project_id" };
   for (const [key, col] of Object.entries(columnMap)) {
     if (patch[key] !== undefined) {
       fields.push(`${col} = $${i++}`);
@@ -790,6 +813,7 @@ async function deleteTask(id) {
 async function getActiveRecurringHeads() {
   const { rows } = await pool.query(
     `SELECT t.id, t.title, t.description, t.priority, t.assignee_id AS "assigneeId",
+            t.assignee_2_id AS "assignee2Id",
             t.created_by AS "createdBy", t.workspace_id AS "workspaceId", t.project_id AS "projectId",
             to_char(t.due, 'YYYY-MM-DD') AS due, to_char(t.due_time, 'HH24:MI') AS "dueTime",
             to_char(t.end_time, 'HH24:MI') AS "endTime",
@@ -835,13 +859,13 @@ async function createRecurrenceOccurrence(head, due, subtasks) {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `INSERT INTO tasks (title, description, status, priority, assignee_id, created_by, due, due_time, end_time,
+      `INSERT INTO tasks (title, description, status, priority, assignee_id, assignee_2_id, created_by, due, due_time, end_time,
                           workspace_id, project_id, recurrence_parent_id)
-       VALUES ($1, $2, 'todo', $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       VALUES ($1, $2, 'todo', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (recurrence_parent_id, due) WHERE recurrence_parent_id IS NOT NULL DO NOTHING
        RETURNING id`,
       [
-        head.title, head.description || "", head.priority || "medium", head.assigneeId, head.createdBy || null,
+        head.title, head.description || "", head.priority || "medium", head.assigneeId, head.assignee2Id || null, head.createdBy || null,
         due, head.dueTime || null, head.endTime || null, head.workspaceId, head.projectId, head.id,
       ]
     );
@@ -1084,7 +1108,7 @@ async function markAllRead(userId) {
 const COMMENT_SELECT = `
   SELECT c.id, c.task_id AS "taskId", c.user_id AS "userId", c.body, c.created_at AS "createdAt",
          u.name AS "userName", u.color AS "userColor", u.initials AS "userInitials",
-         CASE WHEN u.avatar_path IS NOT NULL THEN '/api/users/' || u.id || '/avatar' ELSE NULL END AS "userAvatarUrl"
+         CASE WHEN u.avatar_data IS NOT NULL OR u.avatar_path IS NOT NULL THEN '/api/users/' || u.id || '/avatar' ELSE NULL END AS "userAvatarUrl"
   FROM task_comments c
   LEFT JOIN users u ON u.id = c.user_id
 `;
@@ -1498,7 +1522,7 @@ async function pingDb() {
 }
 
 module.exports = {
-  getUserById, getUserByEmail, createUser, updateUserPassword, ensurePlatformAdminFromEnv, updateUserAvatar, updateUserProfile,
+  getUserById, getUserByEmail, createUser, updateUserPassword, ensurePlatformAdminFromEnv, updateUserAvatar, getUserAvatar, updateUserProfile,
   pingDb,
   createPasswordReset, getValidPasswordReset, consumePasswordReset,
   getWorkspacesForUser, getWorkspaceById, createWorkspace, renameWorkspace,

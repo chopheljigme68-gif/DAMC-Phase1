@@ -67,7 +67,19 @@ function parseClockTime(raw) {
 // extended to the task's current assignee — it's your work, you should be
 // able to attach to it — but NOT to a past assignee if it's been reassigned
 // since (task.assigneeId always reflects who owns it right now).
-const canTouchTask = (req, task) => isManager(req) || (task && (task.createdBy === req.user.id || task.assigneeId === req.user.id));
+// One definition of "this task is mine", used by every permission check: the
+// person it's assigned to, the SECOND person it's assigned to, or whoever
+// created it. Second assignees are full owners of the work — a rule that
+// says otherwise would make the feature decorative.
+const isOwnerOf = (userId, task) =>
+  Boolean(task) && (task.createdBy === userId || task.assigneeId === userId || task.assignee2Id === userId);
+
+const canTouchTask = (req, task) => isManager(req) || isOwnerOf(req.user.id, task);
+
+// The database has a CHECK constraint on status. Without this, a bad value
+// surfaces as a 500 and "Something went wrong on our end" — a client mistake
+// dressed up as a server failure. Kept in step with the constraint.
+const TASK_STATUSES = ["todo", "done"];
 
 async function assertBelongsToProject(taskId, projectId) {
   const task = await getTaskById(taskId);
@@ -94,9 +106,21 @@ router.get("/", async (req, res, next) => {
 // be opened up.
 router.post("/", async (req, res, next) => {
   try {
-    const { title, description, meetingNotes, status, priority, assigneeId, due, dueTime, endTime, subtasks, links, recurrence } = req.body || {};
+    const { title, description, meetingNotes, status, priority, assigneeId, assignee2Id, due, dueTime, endTime, subtasks, links, recurrence } = req.body || {};
     if (!title || !title.trim()) return res.status(400).json({ error: "Title is required" });
     if (!assigneeId) return res.status(400).json({ error: "Assignee is required" });
+    if (status !== undefined && status !== null && !TASK_STATUSES.includes(status)) {
+      return res.status(400).json({ error: `Status must be one of: ${TASK_STATUSES.join(", ")}` });
+    }
+    // A second person is optional, but if given must be a real member and a
+    // DIFFERENT one — the same name in both slots would double-count the
+    // work on every dashboard and in every report.
+    if (assignee2Id) {
+      if (assignee2Id === assigneeId) return res.status(400).json({ error: "The second assignee must be a different person" });
+      if (!(await assertAssigneeIsMember(req.params.workspaceId, assignee2Id))) {
+        return res.status(400).json({ error: "The second assignee is not a member of this workspace" });
+      }
+    }
     if (!(await assertAssigneeIsMember(req.params.workspaceId, assigneeId))) {
       return res.status(400).json({ error: "Assignee must be a member of this workspace" });
     }
@@ -110,7 +134,7 @@ router.post("/", async (req, res, next) => {
     if (rule && !due) return res.status(400).json({ error: "Pick a due date — a repeating activity repeats from its first date" });
 
     const task = await createTask({
-      title: title.trim(), description, meetingNotes, status, priority, assigneeId, due, dueTime, endTime, subtasks, links,
+      title: title.trim(), description, meetingNotes, status, priority, assigneeId, assignee2Id: assignee2Id || null, due, dueTime, endTime, subtasks, links,
       recurrence: rule,
       createdBy: req.user.id, workspaceId: req.params.workspaceId, projectId: req.params.projectId,
     });
@@ -119,6 +143,17 @@ router.post("/", async (req, res, next) => {
     // moment the dialog closes instead of on the next hourly sweep.
     if (rule) await generateForTask(task.id);
 
+    // The second assignee is told as well — being given work you never hear
+    // about is the same as not being given it. Nobody is notified about their
+    // own entry. The first assignee's notification is the block below, left
+    // exactly as it was.
+    if (assignee2Id && assignee2Id !== req.user.id) {
+      await notify({
+        userId: assignee2Id, type: "assigned", taskId: task.id, taskTitle: task.title,
+        workspaceId: req.params.workspaceId,
+        message: `${req.user.name} assigned you "${task.title}", together with a colleague`,
+      });
+    }
     if (assigneeId !== req.user.id) {
       await notify({
         userId: assigneeId, type: "assigned", taskId: task.id, taskTitle: task.title,
@@ -202,7 +237,7 @@ router.patch("/:id", async (req, res, next) => {
     // on your own task: handing work to someone else is a management
     // decision, not an "edit my own task" one.
     const manager = isManager(req);
-    const isOwnTask = existing.assigneeId === req.user.id || existing.createdBy === req.user.id;
+    const isOwnTask = isOwnerOf(req.user.id, existing);
     if (!manager && !isOwnTask) {
       return res.status(403).json({ error: "You can only edit a task assigned to you or one you created" });
     }
@@ -211,9 +246,12 @@ router.patch("/:id", async (req, res, next) => {
     }
 
     const patch = {};
-    ["title", "description", "meetingNotes", "status", "priority", "assigneeId", "due", "dueTime", "endTime"].forEach((k) => {
+    ["title", "description", "meetingNotes", "status", "priority", "assigneeId", "assignee2Id", "due", "dueTime", "endTime"].forEach((k) => {
       if (req.body[k] !== undefined) patch[k] = req.body[k];
     });
+    if (patch.status !== undefined && !TASK_STATUSES.includes(patch.status)) {
+      return res.status(400).json({ error: `Status must be one of: ${TASK_STATUSES.join(", ")}` });
+    }
     // Validate the range as it will BE after this patch, not just what the
     // request happens to carry — changing only the start time can invalidate
     // an end time that's already stored.
@@ -222,6 +260,13 @@ router.patch("/:id", async (req, res, next) => {
       const nextEnd = patch.endTime !== undefined ? patch.endTime : existing.endTime;
       const timeError = validateTimeRange(nextStart, nextEnd);
       if (timeError) return res.status(400).json({ error: timeError });
+    }
+    if (patch.assignee2Id !== undefined && patch.assignee2Id !== null) {
+      const nextFirst = patch.assigneeId !== undefined ? patch.assigneeId : existing.assigneeId;
+      if (patch.assignee2Id === nextFirst) return res.status(400).json({ error: "The second assignee must be a different person" });
+      if (!(await assertAssigneeIsMember(req.params.workspaceId, patch.assignee2Id))) {
+        return res.status(400).json({ error: "The second assignee is not a member of this workspace" });
+      }
     }
     if (patch.assigneeId && !(await assertAssigneeIsMember(req.params.workspaceId, patch.assigneeId))) {
       return res.status(400).json({ error: "Assignee must be a member of this workspace" });
@@ -338,7 +383,7 @@ router.delete("/:id", async (req, res, next) => {
     // Same boundary as editing: yours to delete if it is assigned to you or
     // you created it. A member cannot delete work that belongs to two other
     // people, which is the case this rule exists to protect.
-    if (!isManager(req) && existing.assigneeId !== req.user.id && existing.createdBy !== req.user.id) {
+    if (!isManager(req) && !isOwnerOf(req.user.id, existing)) {
       return res.status(403).json({ error: "You can only delete a task assigned to you or one you created" });
     }
     // Deleting one occurrence has to STICK. The generator fills in missing

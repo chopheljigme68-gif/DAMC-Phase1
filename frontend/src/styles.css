@@ -375,12 +375,19 @@ body.tfh-resizing * { cursor: col-resize !important; }
 }
 
 .tfh-agenda-time {
-  width: 124px; flex-shrink: 0; text-align: right; white-space: nowrap;
+  /* min-width, NOT width. A fixed width plus white-space:nowrap doesn't clip
+     an over-long range — it overflows the box and prints straight over the
+     title next to it ("11:00 AM – 12:00 PResearch Collab"). min-width keeps
+     the column aligned for the times that fit and lets a long range push the
+     title along instead of colliding with it. padding-right guarantees a gap
+     even at the widest. */
+  min-width: 124px; width: auto; flex-shrink: 0; flex-grow: 0;
+  text-align: right; white-space: nowrap; padding-right: 2px;
   font-size: 11.5px; margin-top: 1px; font-variant-numeric: tabular-nums;
 }
 /* The Team column is much narrower than the dashboard's own cards, so the
    gutter there is sized down rather than eating half the row. */
-.tfh-team-column .tfh-agenda-time { width: 104px; font-size: 10.5px; }
+.tfh-team-column .tfh-agenda-time { min-width: 104px; width: auto; font-size: 10.5px; }
 
 /* The draggable divider between "mine" and the Team column. Same behaviour
    as the sidebar handle, but it moves a split rather than one edge. */
@@ -415,7 +422,7 @@ body.tfh-resizing * { cursor: col-resize !important; }
      width regardless of the stored percentage. */
   .tfh-column-resizer { display: none; }
   .tfh-dashboard-columns > div { flex-basis: auto !important; }
-  .tfh-agenda-time { width: 104px; }
+  .tfh-agenda-time { min-width: 96px; width: auto; }
 }
 
 /* ============================================================ */

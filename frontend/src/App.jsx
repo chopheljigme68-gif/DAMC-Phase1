@@ -408,7 +408,7 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
   const isDone = task.status === "done";
   // A manager can toggle any card's completion. A plain member can toggle
   // only a card assigned to them — everyone else's tasks stay view-only.
-  const canModify = canManage || task.assigneeId === currentUserId;
+  const canModify = canManage || isAssignedTo(task, currentUserId) || task.createdBy === currentUserId;
 
   return (
     <div
@@ -512,7 +512,7 @@ const emptyDraft = (status, users, currentUserId, projectId) => ({
   // Today, not "three days out": almost everything logged here is being
   // recorded on the day it happens or is about to. A default you have to
   // correct on most entries is worse than no default.
-  assigneeId: currentUserId || users[0]?.id || "", due: localDateStr(new Date()),
+  assigneeId: currentUserId || users[0]?.id || "", assignee2Id: null, due: localDateStr(new Date()),
   dueTime: "", endTime: "", subtasks: [], pendingLinks: [], pendingFiles: [], projectId: projectId || "",
   recurrence: null,
 });
@@ -1477,7 +1477,7 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
   // "Mine" now means assigned to me OR created by me. A member can edit and
   // delete either; work that is neither — between two other people — stays
   // view + comment only, so nobody can quietly delete someone else's record.
-  const isOwnTask = Boolean(draft.id) && (draft.assigneeId === currentUserId || draft.createdBy === currentUserId);
+  const isOwnTask = Boolean(draft.id) && (isAssignedTo(draft, currentUserId) || draft.createdBy === currentUserId);
   const canEditFields = !draft.id || canManage || isOwnTask;
   const canAttach = canManage || isOwnTask;
   const canChangeAssignee = !draft.id || canManage;
@@ -1568,6 +1568,27 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
             <label className="tfh-label">Assignee</label>
             <select disabled={!canChangeAssignee} className="tfh-input" value={draft.assigneeId} onChange={(e) => setDraft({ ...draft, assigneeId: e.target.value })} style={{ opacity: canChangeAssignee ? 1 : 0.7 }}>
               {users.map((m) => <option key={m.id} value={m.id}>{m.name}{m.role === "admin" ? " (Admin)" : m.role === "lead" ? " (Lead)" : ""}</option>)}
+            </select>
+          </div>
+          {/* A second person, for work two staff do together. Optional, and
+              the first assignee is excluded from the list so the same name
+              can't land in both slots — that would double-count the activity
+              on every dashboard and in every report. */}
+          <div>
+            <label className="tfh-label">
+              Assignee 2 <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional)</span>
+            </label>
+            <select
+              disabled={!canChangeAssignee} className="tfh-input"
+              value={draft.assignee2Id || ""}
+              onChange={(e) => setDraft({ ...draft, assignee2Id: e.target.value || null })}
+              style={{ opacity: canChangeAssignee ? 1 : 0.7 }}
+              title="Give this activity to a second person as well"
+            >
+              <option value="">— nobody else —</option>
+              {users.filter((m) => m.id !== draft.assigneeId).map((m) => (
+                <option key={m.id} value={m.id}>{m.name}{m.role === "admin" ? " (Admin)" : m.role === "lead" ? " (Lead)" : ""}</option>
+              ))}
             </select>
           </div>
           <div>
@@ -2356,6 +2377,13 @@ const activityItemsFrom = (logEntry, author) =>
       author,
     }));
 
+// One activity can be given to two people. Every "is this theirs?" test in
+// the app goes through here, so a second assignee sees the work on their own
+// dashboard exactly as the first does — a second slot that only shows up in
+// the dialog would be decorative.
+const isAssignedTo = (task, userId) =>
+  Boolean(userId) && (task.assigneeId === userId || task.assignee2Id === userId);
+
 const mergeAgenda = (tasksToday, logEntry, author) => {
   const items = [
     ...tasksToday.map((t) => ({ time: t.dueTime || null, endTime: t.endTime || null, label: t.title, kind: "task", task: t })),
@@ -2370,16 +2398,47 @@ const mergeAgenda = (tasksToday, logEntry, author) => {
   return [...timed, ...untimed];
 };
 
-const shortDate = (dateStr) => new Date(dateStr + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+// Day-first and spelled out by hand, NOT via toLocaleDateString. That helper
+// orders by the BROWSER's locale, so the same heading reads "30 Sept" for one
+// person and "Sept 30" for another and the markup can't control it — the same
+// trap that made every date input dd/mm/yyyy by hand (see DateField). This
+// office reads day-first, so that is what is written here, always.
+const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// "Sept", not "Sep" — four letters for September is what this office writes,
+// and it is the one month where the three-letter form looks wrong to them.
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"];
+
+// Noon, not midnight: a date-only string parsed at midnight can fall on the
+// previous day once a timezone offset is applied, which would print the wrong
+// weekday against the right date — the worst kind of wrong.
+const dateParts = (dateStr) => {
+  const [y, m, d] = String(dateStr || "").slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return { y, m, d, weekday: new Date(y, m - 1, d, 12).getDay() };
+};
+
+const shortDate = (dateStr) => {
+  const p = dateParts(dateStr);
+  return p ? `${p.d} ${MONTH_NAMES[p.m - 1]}` : "";
+};
+
+// The heading form: weekday first, because when you are planning "Wednesday"
+// is what you think in and "30 Sept" is what you check it against. Only the
+// agenda headings use this — the tight inline dates on search results and
+// board cards stay short, where a weekday would cost more room than it earns.
+const dayAndDate = (dateStr) => {
+  const p = dateParts(dateStr);
+  return p ? `${WEEKDAY_NAMES[p.weekday]} ${p.d} ${MONTH_NAMES[p.m - 1]}` : "";
+};
 
 // Recently completed tasks + past (non-today) logged activity, newest
 // first — the "Past" tab's content. Activity log entries here come from a
 // wider date-range fetch, not the today-only one.
 const buildPastItems = (pastTasks, pastLogEntries, author) => {
   const items = [
-    ...pastTasks.map((t) => ({ dateStr: t.due, dateLabel: shortDate(t.due), label: t.title, kind: "task", task: t })),
+    ...pastTasks.map((t) => ({ dateStr: t.due, dateLabel: dayAndDate(t.due), label: t.title, kind: "task", task: t })),
     ...pastLogEntries.flatMap((l) =>
-      activityItemsFrom(l, author).map((item) => ({ ...item, dateStr: l.entryDate, dateLabel: shortDate(l.entryDate) }))
+      activityItemsFrom(l, author).map((item) => ({ ...item, dateStr: l.entryDate, dateLabel: dayAndDate(l.entryDate) }))
     ),
   ];
   return items.sort((a, b) => b.dateStr.localeCompare(a.dateStr));
@@ -2395,7 +2454,7 @@ const buildPastItems = (pastTasks, pastLogEntries, author) => {
 // activities leave it blank rather than printing a placeholder.
 const buildUpcomingItems = (upcomingTasks, dateTone) =>
   upcomingTasks.map((t) => ({
-    dateStr: t.due, dateLabel: shortDate(t.due), label: t.title,
+    dateStr: t.due, dateLabel: dayAndDate(t.due), label: t.title,
     time: t.dueTime || null, endTime: t.endTime || null,
     kind: "task", task: t, dateTone,
   }));
@@ -2982,18 +3041,18 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
 
   const todayStr = localDateStr();
 
-  const myTasksToday = tasks.filter((t) => t.assigneeId === currentUser?.id && t.due === todayStr);
+  const myTasksToday = tasks.filter((t) => isAssignedTo(t, currentUser?.id) && t.due === todayStr);
   // NOT capped. It used to take the first 6, which silently hid anything
   // further out — an activity added for the 24th simply never appeared, and
   // looked like it hadn't saved. The card scrolls instead.
   const myUpcoming = [...tasks]
-    .filter((t) => t.assigneeId === currentUser?.id && t.status !== "done" && t.due && t.due > todayStr)
+    .filter((t) => isAssignedTo(t, currentUser?.id) && t.status !== "done" && t.due && t.due > todayStr)
     .sort((a, b) => new Date(a.due) - new Date(b.due));
   // "Pending works" — my tasks that are past due but still not done. These
   // are the things that have slipped and need catching up on, distinct from
   // "upcoming" (future) and "today".
   const myPending = [...tasks]
-    .filter((t) => t.assigneeId === currentUser?.id && t.status !== "done" && t.due && t.due < todayStr)
+    .filter((t) => isAssignedTo(t, currentUser?.id) && t.status !== "done" && t.due && t.due < todayStr)
     .sort((a, b) => new Date(b.due) - new Date(a.due));
   const myTodayEntry = myLogs.find((l) => l.entryDate === todayStr);
   const myAgenda = mergeAgenda(myTasksToday, myTodayEntry, currentUser);
@@ -3002,14 +3061,14 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   // "Past" this is tasks only and includes ones completed today, which is
   // what the old Complete button showed on the Board.
   const myComplete = [...tasks]
-    .filter((t) => t.assigneeId === currentUser?.id && t.status === "done" && t.due)
+    .filter((t) => isAssignedTo(t, currentUser?.id) && t.status === "done" && t.due)
     .sort((a, b) => new Date(b.due) - new Date(a.due))
     .slice(0, 50);
 
   // Past activities: my completed tasks + my logged activity from before
   // today, newest first — the diary view.
   const myPastItems = buildPastItems(
-    [...tasks].filter((t) => t.assigneeId === currentUser?.id && t.status === "done" && t.due && t.due < todayStr).sort((a, b) => new Date(b.due) - new Date(a.due)).slice(0, 15),
+    [...tasks].filter((t) => isAssignedTo(t, currentUser?.id) && t.status === "done" && t.due && t.due < todayStr).sort((a, b) => new Date(b.due) - new Date(a.due)).slice(0, 15),
     myLogs.filter((l) => l.entryDate < todayStr),
     currentUser
   ).slice(0, 20);
@@ -3158,13 +3217,13 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
         let items = [];
         let emptyText = "Nothing here.";
         if (teamTab === "today") {
-          const theirTasksToday = tasks.filter((t) => t.assigneeId === u.id && t.due === todayStr);
+          const theirTasksToday = tasks.filter((t) => isAssignedTo(t, u.id) && t.due === todayStr);
           const theirEntry = teamLogs.find((l) => l.userId === u.id && l.entryDate === todayStr);
           items = mergeAgenda(theirTasksToday, theirEntry, u);
           emptyText = "Nothing today.";
         } else if (teamTab === "upcoming") {
           const theirUpcoming = [...tasks]
-            .filter((t) => t.assigneeId === u.id && t.status !== "done" && t.due && t.due > todayStr)
+            .filter((t) => isAssignedTo(t, u.id) && t.status !== "done" && t.due && t.due > todayStr)
             .sort((a, b) => new Date(a.due) - new Date(b.due));
           items = buildUpcomingItems(theirUpcoming);
           emptyText = "Nothing upcoming.";
@@ -3172,13 +3231,13 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
           // Pending = this member's overdue-but-not-done tasks, most overdue
           // first. Shown here so a supervisor can see who's behind at a glance.
           const theirPending = [...tasks]
-            .filter((t) => t.assigneeId === u.id && t.status !== "done" && t.due && t.due < todayStr)
+            .filter((t) => isAssignedTo(t, u.id) && t.status !== "done" && t.due && t.due < todayStr)
             .sort((a, b) => new Date(a.due) - new Date(b.due));
           items = buildUpcomingItems(theirPending);
           emptyText = "Nothing pending — all caught up.";
         } else {
           const theirPastTasks = tasks
-            .filter((t) => t.assigneeId === u.id && t.status === "done" && t.due && t.due < todayStr)
+            .filter((t) => isAssignedTo(t, u.id) && t.status === "done" && t.due && t.due < todayStr)
             .sort((a, b) => new Date(b.due) - new Date(a.due))
             .slice(0, 8);
           const theirPastLogs = teamLogs.filter((l) => l.userId === u.id && l.entryDate < todayStr);
@@ -3663,7 +3722,7 @@ const TeamView = ({ tasks, users, currentUser, onOpen, onSetRole, onSetTitle, on
   const [selectedBar, setSelectedBar] = useState(null);
   const selected = chartData.find((d) => d.id === selectedBar) || null;
   const selectedTasks = selected
-    ? tasks.filter((t) => t.assigneeId === selected.id && t.status === "done")
+    ? tasks.filter((t) => isAssignedTo(t, selected.id) && t.status === "done")
     : [];
 
   const submitInvite = async (e) => {
@@ -3855,7 +3914,7 @@ const TeamView = ({ tasks, users, currentUser, onOpen, onSetRole, onSetTitle, on
         {users.map((m) => {
           const isMe = currentUser.id === m.id;
           const showTaskInfo = canManage || isMe;
-          const mine = tasks.filter((t) => t.assigneeId === m.id);
+          const mine = tasks.filter((t) => isAssignedTo(t, m.id));
           const active = mine.filter((t) => t.status !== "done");
           return (
             <div key={m.id} className="tfh-card" style={{ padding: 16, borderColor: isMe ? "var(--accent)" : "var(--line)" }}>
@@ -6713,9 +6772,9 @@ function Workspace() {
         // Same definition as the dialog uses to unlock the fields: yours if
         // it is assigned to you or you created it. If these two ever drift
         // apart, a member gets an editable form whose save is refused.
-        const isOwnTask = draft.assigneeId === user.id || draft.createdBy === user.id;
+        const isOwnTask = isAssignedTo(draft, user.id) || draft.createdBy === user.id;
         const patch = canManage
-          ? { title: draft.title, description: draft.description, meetingNotes: draft.meetingNotes || "", status: draft.status, priority: draft.priority, assigneeId: draft.assigneeId, due: draft.due, dueTime: draft.dueTime || null, endTime: draft.endTime || null }
+          ? { title: draft.title, description: draft.description, meetingNotes: draft.meetingNotes || "", status: draft.status, priority: draft.priority, assigneeId: draft.assigneeId, assignee2Id: draft.assignee2Id || null, due: draft.due, dueTime: draft.dueTime || null, endTime: draft.endTime || null }
           : isOwnTask
             ? { title: draft.title, description: draft.description, meetingNotes: draft.meetingNotes || "", status: draft.status, priority: draft.priority, due: draft.due, dueTime: draft.dueTime || null, endTime: draft.endTime || null }
             : { status: draft.status };
@@ -6746,9 +6805,9 @@ function Workspace() {
         // atomically with the task server-side); pendingFiles can't — those
         // upload as a real follow-up request right below, once the task has
         // an id to attach to.
-        const { title, description, meetingNotes, status, priority, assigneeId, due, dueTime, endTime, recurrence } = draft;
+        const { title, description, meetingNotes, status, priority, assigneeId, assignee2Id, due, dueTime, endTime, recurrence } = draft;
         const { task } = await api.createTask(currentId, taskProjectId, {
-          title, description, meetingNotes: meetingNotes || "", status, priority, assigneeId, due, dueTime, endTime: endTime || null,
+          title, description, meetingNotes: meetingNotes || "", status, priority, assigneeId, assignee2Id: assignee2Id || null, due, dueTime, endTime: endTime || null,
           recurrence: recurrence || null,
           subtasks: cleanSubtasks, links: draft.pendingLinks,
         });

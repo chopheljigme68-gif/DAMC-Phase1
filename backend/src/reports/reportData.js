@@ -43,7 +43,10 @@ async function gatherReportData({ workspaceId, userId = null, projectId = null, 
   // ---- tasks ----
   const taskParams = [workspaceId];
   let taskWhere = "t.workspace_id = $1";
-  if (userId) { taskParams.push(userId); taskWhere += ` AND t.assignee_id = $${taskParams.length}`; }
+  // An activity shared with a second person belongs in BOTH their reports —
+  // filtering on assignee_id alone would quietly drop half of someone's work
+  // from their own record.
+  if (userId) { taskParams.push(userId); taskWhere += ` AND (t.assignee_id = $${taskParams.length} OR t.assignee_2_id = $${taskParams.length})`; }
   if (projectId) { taskParams.push(projectId); taskWhere += ` AND t.project_id = $${taskParams.length}`; }
   // An undated task has no due date to fall inside the window; it is kept
   // rather than silently dropped, because "what has this person worked on"
@@ -54,7 +57,8 @@ async function gatherReportData({ workspaceId, userId = null, projectId = null, 
   const { rows: tasks } = await pool.query(
     `SELECT t.id, t.title, t.description, t.meeting_notes AS "meetingNotes", t.status, t.priority,
             t.project_id AS "projectId", t.assignee_id AS "assigneeId",
-            a.name AS "assigneeName", c.name AS "createdByName",
+            a.name AS "assigneeName", t.assignee_2_id AS "assignee2Id", a2.name AS "assignee2Name",
+            c.name AS "createdByName",
             to_char(t.due, 'YYYY-MM-DD') AS due,
             to_char(t.due_time, 'HH24:MI') AS "dueTime",
             to_char(t.end_time, 'HH24:MI') AS "endTime",
@@ -62,6 +66,7 @@ async function gatherReportData({ workspaceId, userId = null, projectId = null, 
             (t.recurrence IS NOT NULL OR t.recurrence_parent_id IS NOT NULL) AS recurring
      FROM tasks t
      LEFT JOIN users a ON a.id = t.assignee_id
+     LEFT JOIN users a2 ON a2.id = t.assignee_2_id
      LEFT JOIN users c ON c.id = t.created_by
      WHERE ${taskWhere}
      ORDER BY t.due ASC NULLS LAST, t.created_at ASC`,

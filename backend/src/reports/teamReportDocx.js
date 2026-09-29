@@ -112,8 +112,13 @@ const completionTiming = (task) => {
 };
 
 // Everything the summary tables need about one person, computed once.
+// An activity given to two people counts for BOTH of them. That does mean
+// the team total is not the sum of the columns above it — correct, and far
+// less misleading than a person's own record missing half their work.
+const isTheirs = (task, memberId) => task.assigneeId === memberId || task.assignee2Id === memberId;
+
 const memberStats = (member, data) => {
-  const mine = data.tasks.filter((t) => t.assigneeId === member.id);
+  const mine = data.tasks.filter((t) => isTheirs(t, member.id));
   const done = mine.filter((t) => t.status === "done");
   const open = mine.filter((t) => t.status !== "done");
   const late = mine.filter(isOverdue);
@@ -446,7 +451,10 @@ function activityBlock(task) {
   ];
 
   if (task.dueTime) rows.push(kv("Time", fmtTimeRange(task.dueTime, task.endTime)));
-  rows.push(kv("Assigned to", task.assigneeName || "Unassigned"));
+  rows.push(kv(
+    task.assignee2Name ? "Assigned to (2 people)" : "Assigned to",
+    task.assignee2Name ? `${task.assigneeName || "Unassigned"}  and  ${task.assignee2Name}` : (task.assigneeName || "Unassigned")
+  ));
   // Reads "Assigned by" when someone else handed this over, "Created by"
   // when it is the person's own entry — the same distinction the dashboard
   // makes, so the document and the screen say the same thing.

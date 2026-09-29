@@ -649,3 +649,27 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_time TIME;
 -- means the brief stays readable after a long meeting is written up, and
 -- the notes can be surfaced on their own.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS meeting_notes TEXT NOT NULL DEFAULT '';
+
+
+/* ---------------- profile photos live in the database ---------------- */
+-- Uploaded files used to be written to the server's own filesystem. On
+-- Render that disk is EPHEMERAL: every deploy and every restart wipes it
+-- while the database row survives, so a profile photo vanished and the
+-- person was back to their initials with no explanation. Photos are small
+-- and bounded (one per person, capped at 4MB), so the honest fix is to keep
+-- the bytes in Postgres, where they outlive any restart.
+-- avatar_path is deliberately LEFT IN PLACE: existing rows still point at a
+-- file, and the read path falls back to it when the bytes aren't here yet.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
+
+/* ---------------- a second person on the same activity ---------------- */
+-- One activity is regularly given to two people ("you two handle this
+-- together"). Modelled as one extra nullable column rather than a join
+-- table on purpose: every screen, filter, report and permission check in
+-- this codebase reads `assignee_id`, and a many-to-many would have meant
+-- rewriting all of them at once. A second slot is what was asked for and
+-- what the work actually looks like — if a third is ever needed, THAT is
+-- the moment to introduce the join table.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_2_id UUID REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee_2 ON tasks(assignee_2_id) WHERE assignee_2_id IS NOT NULL;

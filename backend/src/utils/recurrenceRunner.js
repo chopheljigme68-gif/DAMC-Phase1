@@ -61,7 +61,10 @@ async function generateForTask(taskId) {
   if (!task || !task.recurrence || task.recurrenceParentId) return 0;
   return generateForHead({
     id: task.id, title: task.title, description: task.description, priority: task.priority,
-    assigneeId: task.assigneeId, createdBy: task.createdBy, workspaceId: task.workspaceId,
+    // Every field an occurrence should inherit has to be listed here BY HAND
+    // — this object is built by hand, so a new task column that isn't added
+    // here is silently dropped from every future occurrence.
+    assigneeId: task.assigneeId, assignee2Id: task.assignee2Id, createdBy: task.createdBy, workspaceId: task.workspaceId,
     projectId: task.projectId, due: task.due, dueTime: task.dueTime, endTime: task.endTime,
     recurrence: task.recurrence, exDates: task.exDates || [],
   });
