@@ -6297,6 +6297,11 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
     try { return localStorage.getItem(PROJECT_LIST_OPEN_KEY) === "1"; } catch { return false; }
   });
   const [showCompleted, setShowCompleted] = useState(false);
+  // Thirty-odd projects is more than anyone scrolls through. Deliberately NOT
+  // persisted: a filter you don't remember setting, silently hiding most of
+  // your projects the next morning, is worse than retyping three letters.
+  const [query, setQuery] = useState("");
+  const searchRef = useRef(null);
 
   const setExpandedPersisted = (next) => {
     setExpanded((prev) => {
@@ -6308,20 +6313,34 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
   const [dragId, setDragId] = useState(null);
   const [order, setOrder] = useState(null); // local optimistic order of active-project ids while dragging
 
-  const active = projects.filter((p) => !p.completedAt);
-  const completed = projects.filter((p) => p.completedAt);
+  const needle = query.trim().toLowerCase();
+  const matches = (p) => !needle || String(p.name || "").toLowerCase().includes(needle);
+  // The counts beside "All projects" and "Completed" stay TRUE counts — they
+  // describe the workspace, not the current filter, and a number that moves
+  // as you type reads like projects are disappearing.
+  const allActive = projects.filter((p) => !p.completedAt);
+  const allCompleted = projects.filter((p) => p.completedAt);
+  const active = allActive.filter(matches);
+  const completed = allCompleted.filter(matches);
+  const searching = needle.length > 0;
 
   // Apply the optimistic order if we have one, else the server order.
   const orderedActive = order
     ? order.map((id) => active.find((p) => p.id === id)).filter(Boolean)
     : active;
 
-  const handleDragStart = (id) => { setDragId(id); if (!order) setOrder(active.map((p) => p.id)); };
+  // Reordering is disabled while a search is active, and this is not a
+  // nicety: the drag maths works on positions within the FULL list, so
+  // dropping B above A in a filtered view would move it above whatever
+  // happens to sit at A's index in the real list — a silent, wrong reorder
+  // that persists to the server.
+  const canReorder = canManage && !searching;
+  const handleDragStart = (id) => { setDragId(id); if (!order) setOrder(allActive.map((p) => p.id)); };
   const handleDragOver = (e, overId) => {
     e.preventDefault();
     if (!dragId || dragId === overId) return;
     setOrder((prev) => {
-      const base = prev || active.map((p) => p.id);
+      const base = prev || allActive.map((p) => p.id);
       const from = base.indexOf(dragId);
       const to = base.indexOf(overId);
       if (from === -1 || to === -1) return base;
@@ -6347,6 +6366,41 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
       <div style={{ padding: "0 4px 6px" }}>
         <NewProjectButton onCreateProject={onCreateProject} />
       </div>
+
+      {/* Search sits above the list, where the eye lands after "New project".
+          Only worth the room once there are enough projects to lose one in —
+          below that it is furniture. */}
+      {allActive.length + allCompleted.length >= 8 && (
+        <div className="tfh-project-search">
+          <Search size={12} color="var(--text-faint)" />
+          <input
+            ref={searchRef}
+            className="tfh-project-search-input"
+            value={query}
+            placeholder="Search projects…"
+            aria-label="Search projects"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              // Typing into a collapsed list would show nothing at all.
+              if (e.target.value.trim()) setExpandedPersisted(true);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { e.preventDefault(); setQuery(""); searchRef.current?.blur(); }
+            }}
+          />
+          {searching && (
+            <button
+              type="button"
+              onClick={() => { setQuery(""); searchRef.current?.focus(); }}
+              className="tfh-project-search-clear"
+              aria-label="Clear the project search"
+              title="Clear"
+            >
+              <X size={11} />
+            </button>
+          )}
+        </div>
+      )}
       {/* The full project list was pushing everything else out of the
           sidebar once there were a dozen or more, so it now lives behind
           "All projects": the row selects the all-projects filter AND opens
@@ -6360,8 +6414,10 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
           style={{ fontSize: 12.5, padding: "7px 10px", flex: 1, minWidth: 0 }}
         >
           <FolderKanban size={13} /> All projects
-          {active.length > 0 && (
-            <span className="tfh-mono" style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--text-faint)" }}>{active.length}</span>
+          {allActive.length > 0 && (
+            <span className="tfh-mono" style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--text-faint)" }}>
+              {searching ? `${active.length}/${allActive.length}` : allActive.length}
+            </span>
           )}
         </button>
         <button
@@ -6381,7 +6437,7 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
           onSelect={onSelectProject} onRename={onRenameProject} onDelete={onDeleteProject}
           dragging={dragId === p.id}
           dragProps={{
-            draggable: canManage,
+            draggable: canReorder,
             onDragStart: () => handleDragStart(p.id),
             onDragOver: (e) => handleDragOver(e, p.id),
             onDrop: handleDrop,
@@ -6389,13 +6445,19 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
           }}
         />
       ))}
+      {/* A search that finds nothing says so. Silence reads as a broken list. */}
+      {expanded && searching && active.length === 0 && completed.length === 0 && (
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", padding: "8px 12px", lineHeight: 1.5 }}>
+          No project matching “{query.trim()}”.
+        </div>
+      )}
       {expanded && completed.length > 0 && (
         <>
           <button
             onClick={() => setShowCompleted((s) => !s)}
             style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-faint)", background: "none", border: "none", padding: "6px 10px", cursor: "pointer" }}
           >
-            {showCompleted ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Completed ({completed.length})
+            {showCompleted ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Completed ({searching ? `${completed.length}/${allCompleted.length}` : allCompleted.length})
           </button>
           {showCompleted && completed.map((p) => (
             <ProjectRow

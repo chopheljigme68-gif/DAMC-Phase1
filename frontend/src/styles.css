@@ -341,6 +341,29 @@ body.tfh-resizing * { cursor: col-resize !important; }
    does the recognising, so the name can stay small; it sits at the right end
    of the row so attribution lines up down the card instead of jostling after
    titles of different lengths. */
+/* Project search — sits in the sidebar between "New project" and the list.
+   Styled as one field rather than an icon plus a box so it reads as a single
+   control in a narrow column. */
+.tfh-project-search {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0 4px 6px; padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--raised);
+  transition: border-color 0.12s ease;
+}
+.tfh-project-search:focus-within { border-color: var(--accent); }
+.tfh-project-search-input {
+  flex: 1; min-width: 0; border: none; background: none; outline: none;
+  color: var(--text); font-size: 12px; font-family: inherit; padding: 0;
+}
+.tfh-project-search-input::placeholder { color: var(--text-faint); }
+.tfh-project-search-clear {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: none; cursor: pointer; padding: 2px;
+  color: var(--text-faint); border-radius: 5px; flex-shrink: 0;
+}
+.tfh-project-search-clear:hover { color: var(--text); background: var(--panel); }
+
 .tfh-assigned-by {
   display: inline-flex; align-items: center; gap: 5px;
   margin-left: auto; flex-shrink: 0;
