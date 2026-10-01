@@ -14,6 +14,7 @@ import {
 
 import { useAuth } from "./context/AuthContext.jsx";
 import { useTheme } from "./context/ThemeContext.jsx";
+import { ACCENTS, TINT_LEVELS, accentLabel, themeSurfaces } from "./appearance.js";
 import { useWorkspace } from "./context/WorkspaceContext.jsx";
 import { useProject } from "./context/ProjectContext.jsx";
 import { api } from "./api.js";
@@ -367,7 +368,7 @@ const Avatar = ({ member, size = 28 }) => {
         <UserX size={size * 0.55} color="var(--text-faint)" />
       )}
       {member?.role === "lead" && (
-        <BadgeCheck size={size * 0.42} color="#12141c" fill="var(--accent)" style={{ position: "absolute", top: -size * 0.32, right: -size * 0.12 }} />
+        <BadgeCheck size={size * 0.42} color="var(--accent-ink)" fill="var(--accent)" style={{ position: "absolute", top: -size * 0.32, right: -size * 0.12 }} />
       )}
       {member?.role === "admin" && (
         <Shield size={size * 0.4} color="#12141c" fill="var(--stage-done)" style={{ position: "absolute", top: -size * 0.3, right: -size * 0.14 }} />
@@ -391,7 +392,7 @@ const PriorityChip = ({ level }) => {
 
 const MiniCheckbox = ({ checked, onClick, disabled }) => (
   <button type="button" onClick={onClick} disabled={disabled} className={`tfh-checkbox ${checked ? "checked" : ""}`} style={disabled ? { opacity: 0.6, cursor: "default" } : undefined} aria-label="Toggle subtask">
-    {checked && <Check size={11} color="#12141c" strokeWidth={3} />}
+    {checked && <Check size={11} color="var(--accent-ink)" strokeWidth={3} />}
   </button>
 );
 
@@ -416,8 +417,10 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
       onClick={() => onOpen(task)}
       style={{
         padding: "12px 13px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 10,
-        borderColor: isDone ? "var(--accent)" : undefined,
-        background: isDone ? "var(--accent-soft)" : undefined,
+        // "Done" is a status, not a control — it stays success-green whatever
+        // accent the viewer has chosen. See --success in styles.css.
+        borderColor: isDone ? "var(--success)" : undefined,
+        background: isDone ? "var(--success-soft)" : undefined,
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
@@ -430,10 +433,10 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
             aria-label={isDone ? "Mark not done" : "Mark complete"}
             title={isDone ? "Click to reopen" : "Mark complete"}
           >
-            <CheckCircle2 size={16} color={isDone ? "var(--accent)" : "var(--text-faint)"} fill={isDone ? "var(--accent)" : "none"} />
+            <CheckCircle2 size={16} color={isDone ? "var(--success)" : "var(--text-faint)"} fill={isDone ? "var(--success-soft)" : "none"} />
           </button>
         )}
-        {!canModify && isDone && <CheckCircle2 size={16} color="var(--accent)" style={{ flexShrink: 0, marginTop: 1 }} />}
+        {!canModify && isDone && <CheckCircle2 size={16} color="var(--success)" style={{ flexShrink: 0, marginTop: 1 }} />}
       </div>
       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
         {showProject && task.projectName && (
@@ -442,7 +445,7 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
           </span>
         )}
         {task.dueTime && (
-          <span className="tfh-chip tfh-mono" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}>
+          <span className="tfh-chip tfh-mono" style={{ background: "var(--clock-soft)", color: "var(--clock)" }}>
             <Clock size={10} /> {formatTimeRange(task.dueTime, task.endTime)}
           </span>
         )}
@@ -468,7 +471,7 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
         <AssignedByChip task={task} compact />
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 11.5, color: isDone ? "var(--accent)" : meta.tone, fontWeight: 500 }}>{meta.label}</span>
+        <span style={{ fontSize: 11.5, color: isDone ? "var(--success)" : meta.tone, fontWeight: 500 }}>{meta.label}</span>
         <Avatar member={assignee} size={24} />
       </div>
     </div>
@@ -1661,7 +1664,7 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
               style={{ display: "flex", alignItems: "center", gap: 8, cursor: canEditFields ? "pointer" : "default", opacity: canEditFields ? 1 : 0.7, textAlign: "left", color: isUrgent(draft.priority) ? "var(--pri-high)" : "var(--text-dim)" }}
             >
               <span className={`tfh-checkbox ${isUrgent(draft.priority) ? "checked" : ""}`} style={{ pointerEvents: "none" }}>
-                {isUrgent(draft.priority) && <Check size={11} color="#12141c" strokeWidth={3} />}
+                {isUrgent(draft.priority) && <Check size={11} color="var(--accent-ink)" strokeWidth={3} />}
               </span>
               <Flag size={13} /> Mark as urgent
             </button>
@@ -1703,14 +1706,14 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
                 title={draft.status === "done" ? "Completed — click to reopen" : "Mark this task complete"}
                 style={{
                   gap: 7,
-                  borderColor: draft.status === "done" ? "var(--accent)" : "var(--line)",
-                  background: draft.status === "done" ? "var(--accent-soft)" : "transparent",
-                  color: draft.status === "done" ? "var(--accent)" : "var(--text-dim)",
+                  borderColor: draft.status === "done" ? "var(--success)" : "var(--line)",
+                  background: draft.status === "done" ? "var(--success-soft)" : "transparent",
+                  color: draft.status === "done" ? "var(--success)" : "var(--text-dim)",
                   fontWeight: draft.status === "done" ? 600 : 500,
                 }}
               >
-                <span className={`tfh-checkbox ${draft.status === "done" ? "checked" : ""}`} style={{ pointerEvents: "none" }}>
-                  {draft.status === "done" && <Check size={11} color="#12141c" strokeWidth={3} />}
+                <span className={`tfh-checkbox ${draft.status === "done" ? "checked success" : ""}`} style={{ pointerEvents: "none" }}>
+                  {draft.status === "done" && <Check size={11} color="var(--success-ink)" strokeWidth={3} />}
                 </span>
                 {draft.status === "done" ? "Completed" : "Mark complete"}
               </button>
@@ -1856,7 +1859,7 @@ const BulkAddModal = ({ users, projects, currentProjectId, currentUserId, onClos
                 style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", textAlign: "left", color: isUrgent(priority) ? "var(--pri-high)" : "var(--text-dim)" }}
               >
                 <span className={`tfh-checkbox ${isUrgent(priority) ? "checked" : ""}`} style={{ pointerEvents: "none" }}>
-                  {isUrgent(priority) && <Check size={11} color="#12141c" strokeWidth={3} />}
+                  {isUrgent(priority) && <Check size={11} color="var(--accent-ink)" strokeWidth={3} />}
                 </span>
                 <Flag size={13} /> Mark all as urgent
               </button>
@@ -2110,22 +2113,52 @@ const GlobalSearch = ({ workspaceId, tasks, users, currentUserId, onOpenTask, on
   );
 };
 
-// Theme picker. A single toggle only ever worked for two themes; with a
-// third (warm) and a "follow the system" option it has to be a real choice
-// list. Same popover mechanics as the notification bell and account menu.
+// Appearance — modelled on macOS's System Settings → Appearance: the four
+// themes as little window previews, then a row of accent-colour swatches.
+// Everything here is PERSONAL: it is saved to the signed-in person's own
+// account (see AppearanceSync), follows them to any computer, survives
+// signing out, and is never applied for anyone else.
+//
+// It stays open while you try things — that is how the macOS pane behaves,
+// and closing on every click made comparing two colours a chore.
 const THEME_OPTIONS = [
-  { id: "system", label: "System", icon: Monitor, hint: "Follow my device" },
+  { id: "system", label: "Auto", icon: Monitor, hint: "Follows your device" },
   { id: "light", label: "Light", icon: Sun, hint: "Cool and bright" },
   { id: "warm", label: "Warm", icon: Sunset, hint: "Easier on the eyes" },
   { id: "dark", label: "Dark", icon: Moon, hint: "Low light" },
 ];
 
-const ThemeMenu = ({ preference, theme, systemTheme, onPick }) => {
+// One miniature window: sidebar, a card, a highlighted row and a button —
+// drawn with the surfaces and accent as they will actually be painted in
+// THAT theme, tint included, from the same function that paints the app. So
+// you can see your colour in Dark before you switch to Dark.
+const ThemePreviewWindow = ({ themeId, accent, tint }) => {
+  const p = themeSurfaces(accent, themeId, tint);
+  const acc = p.accent;
+  return (
+    <svg viewBox="0 0 60 40" width="100%" height="100%" aria-hidden="true" style={{ display: "block" }}>
+      <rect width="60" height="40" fill={p.page} />
+      <rect x="0" y="0" width="16" height="40" fill={p.panel} />
+      <rect x="3" y="6" width="10" height="3" rx="1.5" fill={acc} opacity="0.9" />
+      <rect x="3" y="12" width="8" height="2" rx="1" fill={p.text} opacity="0.6" />
+      <rect x="3" y="16" width="9" height="2" rx="1" fill={p.text} opacity="0.6" />
+      <rect x="20" y="6" width="36" height="28" rx="3" fill={p.panel} stroke={p.line} strokeWidth="0.75" />
+      <rect x="24" y="11" width="20" height="2.5" rx="1.25" fill={p.text} opacity="0.7" />
+      <rect x="24" y="17" width="26" height="2" rx="1" fill={p.text} opacity="0.45" />
+      <rect x="40" y="26" width="12" height="5" rx="2.5" fill={acc} />
+    </svg>
+  );
+};
+
+const ThemeMenu = () => {
+  const { theme, preference, accent, tint, tintInEffect, systemTheme, setPreference, setAccent, setTint, resetAppearance } = useTheme();
   const [open, setOpen] = useState(false);
+  const [hoverAccent, setHoverAccent] = useState(null);
   const ref = useRef(null);
+  const customRef = useRef(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
     const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
     document.addEventListener("mousedown", onClick);
@@ -2133,51 +2166,189 @@ const ThemeMenu = ({ preference, theme, systemTheme, onPick }) => {
     return () => { document.removeEventListener("mousedown", onClick); document.removeEventListener("keydown", onKey); };
   }, [open]);
 
-  // The button shows what's actually PAINTED, so the icon always matches
-  // what you're looking at — including when "System" flips at sunset.
+  // The button shows what is actually PAINTED, so the icon always matches
+  // what you are looking at — including when Auto flips at sunset.
   const painted = THEME_OPTIONS.find((o) => o.id === theme) || THEME_OPTIONS[3];
   const PaintedIcon = painted.icon;
-  const current = THEME_OPTIONS.find((o) => o.id === preference);
+  const isCustom = typeof accent === "string" && accent.startsWith("#");
+  const isDefault = preference === "dark" && accent === "damc" && tintInEffect === "off";
+
+  // Swatch colours are the vivid Apple originals; what gets PAINTED is the
+  // contrast-adjusted version (see appearance.js), so a swatch can look a
+  // shade brighter than the same colour used as text on a white page.
+  const swatchColor = (a) =>
+    a.id === "damc" ? a.swatch : theme === "dark" ? a.dark : a.light;
+
+  // Arrow keys move through a radio group, as they do in any native one.
+  const onRadioKeys = (e, items, currentIndex, pick) => {
+    const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = (currentIndex + step + items.length) % items.length;
+    pick(items[next]);
+    const group = e.currentTarget.closest("[role=radiogroup]");
+    group?.querySelectorAll("[role=radio]")[next]?.focus();
+  };
+
+  // A new selection ends any hover preview, so the name underneath always
+  // describes what is actually chosen — not whichever swatch the pointer
+  // happened to pass on its way to the colour picker.
+  useEffect(() => { setHoverAccent(null); }, [accent]);
+
+  const accentIndex = ACCENTS.findIndex((a) => a.id === accent);
+  const nameFor = (value) =>
+    typeof value === "string" && value.startsWith("#") ? `Custom · ${value.toUpperCase()}` : accentLabel(value);
+  const shownName = hoverAccent ? nameFor(hoverAccent) : nameFor(accent);
 
   return (
     <div style={{ position: "relative" }} ref={ref}>
       <button
         className="tfh-btn tfh-btn-ghost" style={{ padding: 8 }}
         onClick={() => setOpen((o) => !o)}
-        aria-haspopup="menu" aria-expanded={open}
-        aria-label={`Theme: ${current?.label || "Dark"}`}
-        title={`Theme: ${current?.label || "Dark"}`}
+        aria-haspopup="dialog" aria-expanded={open}
+        aria-label="Appearance"
+        title="Appearance — theme and accent colour"
       >
         <PaintedIcon size={16} />
       </button>
 
       {open && (
-        <div className="tfh-card tfh-fade-in" role="menu" style={{ position: "absolute", right: 0, top: 44, width: 214, zIndex: 30, padding: 6 }}>
-          {THEME_OPTIONS.map((o) => {
-            const Icon = o.icon;
-            const active = preference === o.id;
-            return (
-              <button
-                key={o.id} role="menuitemradio" aria-checked={active}
-                onClick={() => { onPick(o.id); setOpen(false); }}
-                className="tfh-account-item"
-                style={{ background: active ? "var(--raised)" : "transparent", color: active ? "var(--accent)" : "var(--text)" }}
-              >
-                <Icon size={14} style={{ flexShrink: 0 }} />
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  {o.label}
-                  {/* Say which way System is currently resolving, so it's not
-                      a mystery which theme you'll get. */}
-                  {/* Reports what the DEVICE says, not what's currently
-                      painted — those differ whenever an explicit theme is
-                      selected, and showing the painted one made this hint
-                      lie about what picking System would give you. */}
-                  {o.id === "system" && <span style={{ color: "var(--text-faint)", fontWeight: 400 }}> · {systemTheme === "dark" ? "dark now" : "light now"}</span>}
-                </span>
-                {active && <Check size={13} style={{ flexShrink: 0 }} />}
+        <div className="tfh-card tfh-fade-in tfh-appearance" role="dialog" aria-label="Appearance">
+          <div className="tfh-appearance-heading">Appearance</div>
+          <div className="tfh-appearance-themes" role="radiogroup" aria-label="Theme">
+            {THEME_OPTIONS.map((o, i) => {
+              const active = preference === o.id;
+              return (
+                <button
+                  key={o.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  tabIndex={active ? 0 : -1}
+                  className={`tfh-theme-tile ${active ? "active" : ""}`}
+                  onClick={() => setPreference(o.id)}
+                  onKeyDown={(e) => onRadioKeys(e, THEME_OPTIONS, i, (x) => setPreference(x.id))}
+                  title={o.hint}
+                >
+                  <span className="tfh-theme-tile-preview">
+                    {o.id === "system" ? (
+                      // Auto is drawn as light and dark halves, the way macOS
+                      // draws it — it IS both, depending on the hour.
+                      <span style={{ display: "flex", width: "100%", height: "100%" }}>
+                        <span style={{ width: "50%", overflow: "hidden" }}>
+                          <span style={{ display: "block", width: "200%", height: "100%" }}><ThemePreviewWindow themeId="light" accent={accent} tint={tint} /></span>
+                        </span>
+                        <span style={{ width: "50%", overflow: "hidden", direction: "rtl" }}>
+                          <span style={{ display: "block", width: "200%", height: "100%" }}><ThemePreviewWindow themeId="dark" accent={accent} tint={tint} /></span>
+                        </span>
+                      </span>
+                    ) : (
+                      <ThemePreviewWindow themeId={o.id} accent={accent} tint={tint} />
+                    )}
+                  </span>
+                  <span className="tfh-theme-tile-label">{o.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          {/* Says which way Auto is resolving right now — from what the DEVICE
+              reports, not what's painted, so the hint never lies about what
+              picking Auto would give you. */}
+          <div className="tfh-appearance-hint">
+            {preference === "system"
+              ? `Following your device · ${systemTheme === "dark" ? "dark" : "light"} right now`
+              : THEME_OPTIONS.find((o) => o.id === preference)?.hint}
+          </div>
+
+          <div className="tfh-appearance-heading" style={{ marginTop: 14 }}>Accent colour</div>
+          <div
+            className="tfh-accent-row" role="radiogroup" aria-label="Accent colour"
+            onMouseLeave={() => setHoverAccent(null)}
+          >
+            {ACCENTS.map((a, i) => {
+              const active = accent === a.id;
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  aria-label={a.label}
+                  tabIndex={active || (accentIndex === -1 && i === 0) ? 0 : -1}
+                  className={`tfh-accent-swatch ${active ? "active" : ""}`}
+                  style={{ "--swatch": swatchColor(a) }}
+                  onClick={() => setAccent(a.id)}
+                  onMouseEnter={() => setHoverAccent(a.id)}
+                  onFocus={() => setHoverAccent(a.id)}
+                  onBlur={() => setHoverAccent(null)}
+                  onKeyDown={(e) => onRadioKeys(e, ACCENTS, i, (x) => setAccent(x.id))}
+                  title={a.label}
+                />
+              );
+            })}
+            {/* Any colour at all. The native picker, because it is the one
+                people already know on their own computer. Changes paint live
+                as you drag and are saved once you stop. */}
+            <label
+              className={`tfh-accent-swatch custom ${isCustom ? "active" : ""}`}
+              style={isCustom ? { "--swatch": accent } : undefined}
+              title="Custom colour"
+              onMouseEnter={() => setHoverAccent(isCustom ? accent : "#custom")}
+            >
+              <input
+                ref={customRef}
+                type="color"
+                aria-label="Custom accent colour"
+                value={isCustom ? accent : "#3a7bd5"}
+                onInput={(e) => setAccent(e.target.value)}
+                onChange={(e) => setAccent(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="tfh-appearance-accent-name">
+            {hoverAccent === "#custom" ? "Custom…" : shownName}
+          </div>
+
+          {/* How far the colour reaches into the page itself. A segmented
+              control, as macOS draws two- and three-way choices. The tint
+              changes the HUE of every surface but holds its brightness, so
+              nothing becomes harder to read at any setting. */}
+          <div className="tfh-appearance-heading" style={{ marginTop: 14 }}>Background tint</div>
+          <div className="tfh-segmented" role="radiogroup" aria-label="Background tint">
+            {TINT_LEVELS.map((level, i) => {
+              const active = tintInEffect === level;
+              return (
+                <button
+                  key={level}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  tabIndex={active ? 0 : -1}
+                  className={`tfh-segment ${active ? "active" : ""}`}
+                  onClick={() => setTint(level)}
+                  onKeyDown={(e) => onRadioKeys(e, TINT_LEVELS, i, (x) => setTint(x))}
+                >
+                  {level === "off" ? "Off" : level === "subtle" ? "Subtle" : "Rich"}
+                </button>
+              );
+            })}
+          </div>
+          <div className="tfh-appearance-hint">
+            {tintInEffect === "off"
+              ? "Only buttons and highlights take the colour."
+              : tintInEffect === "subtle"
+                ? "The page and cards take a hint of the colour."
+                : "The whole interface is washed in the colour."}
+          </div>
+
+          <div className="tfh-appearance-footer">
+            <span>Only you see this. It follows you to any computer you sign in on, and stays after you sign out.</span>
+            {!isDefault && (
+              <button type="button" className="tfh-appearance-reset" onClick={resetAppearance}>
+                Reset
               </button>
-            );
-          })}
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -2337,7 +2508,7 @@ const TaskListMini = ({ title, items, users, onOpen, emptyText, showAssignee }) 
         return (
           <button key={t.id} onClick={() => onOpen(t)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 8px", borderRadius: 10, background: "transparent", border: "none", color: "var(--text)", textAlign: "left" }}>
             <span style={{ width: 7, height: 7, borderRadius: 999, background: STAGES.find((s) => s.id === t.status).color, flexShrink: 0 }} />
-            {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--accent)", flexShrink: 0 }}>{formatTimeRange(t.dueTime, t.endTime)}</span>}
+            {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--clock)", flexShrink: 0 }}>{formatTimeRange(t.dueTime, t.endTime)}</span>}
             <span style={{ fontSize: 13.5, flex: 1, color: t.status === "done" ? "var(--text-dim)" : "var(--text)" }}>{t.title}</span>
             <PriorityChip level={t.priority} />
             <span style={{ fontSize: 12, color: meta.tone, minWidth: 92, textAlign: "right" }}>{meta.label}</span>
@@ -2537,7 +2708,7 @@ const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
           className="tfh-mono tfh-agenda-time"
           style={{
             fontWeight: item.dateLabel ? 600 : 400,
-            color: item.time ? "var(--accent)" : item.dateLabel ? (item.dateTone || "var(--date-scheduled)") : "var(--text-faint)",
+            color: item.time ? "var(--clock)" : item.dateLabel ? (item.dateTone || "var(--date-scheduled)") : "var(--text-faint)",
           }}
         >
           {item.time ? formatTimeRange(item.time, item.endTime) : item.dateLabel || "Anytime"}
@@ -2566,7 +2737,7 @@ const AgendaRow = ({ item, onOpen, onOpenActivity, grouped }) => {
             date in the gutter, so its time goes on the right instead of
             being lost. Inside a group the gutter already carries the time. */}
         {item.kind === "task" && item.dateLabel && !item.time && item.task.dueTime && (
-          <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--accent)", marginLeft: "auto" }}>{formatTimeRange(item.task.dueTime, item.task.endTime)}</span>
+          <span className="tfh-mono" style={{ fontSize: 10.5, color: "var(--clock)", marginLeft: "auto" }}>{formatTimeRange(item.task.dueTime, item.task.endTime)}</span>
         )}
       </div>
       {/* Who gave you this. A SIBLING of the title block, not inside it: the
@@ -2649,7 +2820,7 @@ const ActivityDetailModal = ({ item, projects, onClose, currentUserId, onSetStat
           {item.author && <Avatar member={item.author} size={24} />}
           <span style={{ fontSize: 12.5, fontWeight: 600 }}>{item.author?.name || "Team member"}</span>
           {block.time && (
-            <span className="tfh-chip tfh-mono" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}>
+            <span className="tfh-chip tfh-mono" style={{ background: "var(--clock-soft)", color: "var(--clock)" }}>
               <Clock size={10} /> {formatTimeLabel(block.time)}
             </span>
           )}
@@ -4132,7 +4303,7 @@ const CalendarView = ({ tasks, users, onOpen, workspaceId, canManage }) => {
               return (
                 <button key={t.id} onClick={() => onOpen(t)} style={{ textAlign: "left", background: "var(--raised)", border: "1px solid var(--line)", borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11, color: "var(--accent)" }}>{formatTimeLabel(t.dueTime)}</span>}
+                    {t.dueTime && <span className="tfh-mono" style={{ fontSize: 11, color: "var(--clock)" }}>{formatTimeLabel(t.dueTime)}</span>}
                     <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{t.title}</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -4340,7 +4511,7 @@ const BlockEditor = ({ content, setContent, readOnly, projects, onSetStatus, can
               (block.text || block.notes || (block.links || []).length > 0) && (
                 <div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                    {block.time && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--accent)", flexShrink: 0 }}>{formatTimeLabel(block.time)}</span>}
+                    {block.time && <span className="tfh-mono" style={{ fontSize: 11.5, color: "var(--clock)", flexShrink: 0 }}>{formatTimeLabel(block.time)}</span>}
                     {block.text && (
                       <div style={{ fontSize: 13, color: block.status === "done" ? "var(--text-dim)" : "var(--text)", textDecoration: block.status === "done" ? "line-through" : "none", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
                         {block.text}
@@ -6263,7 +6434,7 @@ const ProjectRow = ({ project, active, canManage, onSelect, onRename, onDelete, 
         style={{ fontSize: 12.5, padding: "7px 10px", flex: 1, minWidth: 0, cursor: canManage ? "grab" : "pointer" }}
         title={canManage ? `${project.name} — drag to reorder` : project.name}
       >
-        <span style={{ width: 6, height: 6, borderRadius: 999, background: project.completedAt ? "var(--accent)" : "var(--stage-progress)", flexShrink: 0 }} />
+        <span style={{ width: 6, height: 6, borderRadius: 999, background: project.completedAt ? "var(--success)" : "var(--stage-progress)", flexShrink: 0 }} />
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{project.name}</span>
       </button>
       {canManage && (
@@ -6601,7 +6772,7 @@ const EditProfileModal = ({ member, currentUser, workspaceId, onClose, onProfile
           >
             <Avatar member={member || currentUser} size={76} />
             <div style={{ position: "absolute", bottom: 0, right: 0, width: 26, height: 26, borderRadius: 999, background: "var(--accent)", border: "3px solid var(--panel)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              {avatarBusy ? <Loader2 size={13} color="#12141c" className="tfh-pulse" /> : <Pencil size={13} color="#12141c" />}
+              {avatarBusy ? <Loader2 size={13} color="var(--accent-ink)" className="tfh-pulse" /> : <Pencil size={13} color="var(--accent-ink)" />}
             </div>
             <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleAvatarFile(e.target.files)} />
           </button>
@@ -6638,7 +6809,6 @@ const EditProfileModal = ({ member, currentUser, workspaceId, onClose, onProfile
 /* ------------------------------------------------------------------ */
 function Workspace() {
   const { user, logout, setUser } = useAuth();
-  const { theme, preference, systemTheme, setPreference } = useTheme();
   const { current, currentId, loading: workspaceLoading, refresh: refreshWorkspaces } = useWorkspace();
   const { projects, current: currentProject, currentId: projectId, loading: projectsLoading, create: createProject, refresh: refreshProjects, switchTo: switchProject } = useProject();
 
@@ -7164,7 +7334,7 @@ function Workspace() {
               onMarkRead={markRead} onMarkAll={markAllRead}
               permission={permission} onRequestPermission={requestPermission}
             />
-            <ThemeMenu preference={preference} theme={theme} systemTheme={systemTheme} onPick={setPreference} />
+            <ThemeMenu />
             <div style={{ width: 1, height: 22, background: "var(--line)", margin: "0 2px", flexShrink: 0 }} />
             <AccountMenu
               member={currentUser}

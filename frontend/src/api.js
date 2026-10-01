@@ -4,8 +4,14 @@ function getToken() {
   return localStorage.getItem("tfh_token");
 }
 
-async function request(path, { method = "GET", body, auth = true } = {}) {
-  const headers = { "Content-Type": "application/json" };
+// One id per open tab, so a change this tab makes can be told apart from the
+// same change echoed back over the socket (see appearance:changed).
+export const CLIENT_ID = (() => {
+  try { return crypto.randomUUID(); } catch { return `c-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+})();
+
+async function request(path, { method = "GET", body, auth = true, headers: extraHeaders } = {}) {
+  const headers = { "Content-Type": "application/json", ...(extraHeaders || {}) };
   if (auth) {
     const token = getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -43,6 +49,8 @@ export const api = {
   setToken: (t) => (t ? localStorage.setItem("tfh_token", t) : localStorage.removeItem("tfh_token")),
 
   register: (payload) => request("/auth/register", { method: "POST", body: payload, auth: false }),
+  updateAppearance: (appearance) =>
+    request("/users/me/appearance", { method: "PATCH", body: appearance, headers: { "X-Client-Id": CLIENT_ID } }),
   login: (payload) => request("/auth/login", { method: "POST", body: payload, auth: false }),
   getHealth: () => request("/health", { auth: false }),
   me: () => request("/auth/me"),

@@ -7,6 +7,7 @@ const WorkspaceContext = createContext(null);
 
 export function WorkspaceProvider({ children }) {
   const { user, loading: authLoading } = useAuth();
+  const userId = user?.id || null;
   const [workspaces, setWorkspaces] = useState([]);
   const [currentId, setCurrentId] = useState(() => localStorage.getItem("tfh_workspace_id") || null);
   const [loading, setLoading] = useState(true);
@@ -26,10 +27,16 @@ export function WorkspaceProvider({ children }) {
     // momentarily-null user, or we'll flash "no workspace" on every refresh
     // before the real session/role data has even loaded.
     if (authLoading) return;
-    if (!user) { setWorkspaces([]); setCurrentId(null); setLoading(false); return; }
+    if (!userId) { setWorkspaces([]); setCurrentId(null); setLoading(false); return; }
     setLoading(true);
     refresh().finally(() => setLoading(false));
-  }, [user, authLoading, refresh]);
+    // Keyed on WHO is signed in, not on the user object. The object is
+    // replaced whenever anything about the person changes — their name, their
+    // photo, their appearance — and depending on it meant every one of those
+    // reloaded the entire workspace behind a spinner, unmounting whatever was
+    // open (the profile dialog, the appearance panel). Only a different
+    // person needs a different set of workspaces.
+  }, [userId, authLoading, refresh]);
 
   useEffect(() => {
     if (currentId) localStorage.setItem("tfh_workspace_id", currentId);

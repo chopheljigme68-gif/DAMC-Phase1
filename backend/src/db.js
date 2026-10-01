@@ -8,6 +8,7 @@ const { pool } = require("./pool");
 const USER_COLUMNS = `id, name, email, password_hash AS "passwordHash", color, initials,
   is_platform_admin AS "isPlatformAdmin", avatar_path AS "avatarPath", avatar_mime AS "avatarMime",
   (avatar_data IS NOT NULL OR avatar_path IS NOT NULL) AS "hasAvatar",
+  theme_preference AS "themePreference", accent_color AS "accentColor", accent_tint AS "accentTint",
   default_title AS "defaultTitle", created_at AS "createdAt"`;
 
 async function getUserById(id) {
@@ -64,6 +65,23 @@ async function updateUserAvatar(userId, data, mimeType) {
 }
 
 /* ==================== password resets ==================== */
+
+// A person's own theme + accent. Either may be left as-is by passing
+// undefined; null clears it back to "not chosen".
+async function updateUserAppearance(userId, { theme, accent, tint }) {
+  const sets = [];
+  const params = [];
+  if (theme !== undefined) { params.push(theme); sets.push(`theme_preference = $${params.length}`); }
+  if (accent !== undefined) { params.push(accent); sets.push(`accent_color = $${params.length}`); }
+  if (tint !== undefined) { params.push(tint); sets.push(`accent_tint = $${params.length}`); }
+  if (!sets.length) return getUserById(userId);
+  params.push(userId);
+  const { rows } = await pool.query(
+    `UPDATE users SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING ${USER_COLUMNS}`,
+    params
+  );
+  return rows[0] || null;
+}
 
 // Reading the bytes is its own query, so the image is only ever loaded when
 // someone is actually looking at it.
@@ -1522,7 +1540,7 @@ async function pingDb() {
 }
 
 module.exports = {
-  getUserById, getUserByEmail, createUser, updateUserPassword, ensurePlatformAdminFromEnv, updateUserAvatar, getUserAvatar, updateUserProfile,
+  getUserById, getUserByEmail, createUser, updateUserPassword, ensurePlatformAdminFromEnv, updateUserAvatar, getUserAvatar, updateUserAppearance, updateUserProfile,
   pingDb,
   createPasswordReset, getValidPasswordReset, consumePasswordReset,
   getWorkspacesForUser, getWorkspaceById, createWorkspace, renameWorkspace,

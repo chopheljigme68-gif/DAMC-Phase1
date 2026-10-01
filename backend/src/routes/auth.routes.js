@@ -13,11 +13,7 @@ const { formatName } = require("../utils/names");
 
 const router = express.Router();
 
-const publicUser = (u) => ({
-  id: u.id, name: u.name, email: u.email, color: u.color, initials: u.initials,
-  isPlatformAdmin: !!u.isPlatformAdmin, avatarUrl: u.avatarPath ? `/api/users/${u.id}/avatar` : null,
-  defaultTitle: u.defaultTitle || null, createdAt: u.createdAt,
-});
+const { publicUser } = require("../utils/publicUser");
 const sign = (user) => jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "30d" });
 const hashToken = (token) => crypto.createHash("sha256").update(token).digest("hex");
 

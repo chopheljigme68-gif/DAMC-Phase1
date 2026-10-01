@@ -1,7 +1,8 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
-const { getUserById, updateUserAvatar, getUserAvatar, updateUserProfile } = require("../db");
+const { getUserById, updateUserAvatar, getUserAvatar, updateUserProfile, updateUserAppearance } = require("../db");
+const { getIO } = require("../socket");
 const { authenticate } = require("../auth");
 const { avatarUpload } = require("../utils/upload");
 const { formatName } = require("../utils/names");
@@ -13,13 +14,7 @@ const router = express.Router();
 const MIME_BY_EXT = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
 const mimeForPath = (p) => MIME_BY_EXT[path.extname(String(p)).toLowerCase()] || "image/png";
 
-const publicUser = (u) => ({
-  id: u.id, name: u.name, email: u.email, color: u.color, initials: u.initials,
-  // hasAvatar covers both storage generations: bytes in the row (current) and
-  // a file on disk (rows uploaded before photos moved into the database).
-  isPlatformAdmin: !!u.isPlatformAdmin, avatarUrl: u.hasAvatar ? `/api/users/${u.id}/avatar` : null,
-  defaultTitle: u.defaultTitle || null, createdAt: u.createdAt,
-});
+const { publicUser } = require("../utils/publicUser");
 
 // Any logged-in user can view another user's avatar — profile photos are
 // low-sensitivity and this keeps <img> tags simple across the app (avatars
@@ -84,6 +79,53 @@ router.post("/me/avatar", authenticate, (req, res, next) => {
     const user = await updateUserAvatar(req.user.id, bytes, req.file.mimetype || mimeForPath(req.file.path));
     fs.unlink(req.file.path, () => {});
     res.json({ user: publicUser(user) });
+  } catch (err) { next(err); }
+});
+
+// ---------------- personal appearance ----------------
+// Theme and accent colour, per person. Lives on the account so it follows
+// them to another computer and survives signing out; only ever read back by
+// that same person.
+const THEMES = ["system", "light", "warm", "dark"];
+const ACCENT_PRESETS = ["damc", "blue", "indigo", "purple", "pink", "red", "orange", "yellow", "teal", "graphite"];
+const isAccent = (v) => ACCENT_PRESETS.includes(v) || (typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v));
+const TINTS = ["off", "subtle", "rich"];
+
+router.patch("/me/appearance", authenticate, async (req, res, next) => {
+  try {
+    const { theme, accent, tint } = req.body || {};
+    // undefined = leave it alone, null = back to "not chosen", anything else
+    // must be a value we know how to paint. Custom colours are normalised to
+    // lower case so the same colour never looks like two different choices.
+    if (theme !== undefined && theme !== null && !THEMES.includes(theme)) {
+      return res.status(400).json({ error: `Theme must be one of: ${THEMES.join(", ")}` });
+    }
+    if (accent !== undefined && accent !== null && !isAccent(accent)) {
+      return res.status(400).json({ error: "Accent must be a preset colour or a #rrggbb value" });
+    }
+    if (tint !== undefined && tint !== null && !TINTS.includes(tint)) {
+      return res.status(400).json({ error: `Tint must be one of: ${TINTS.join(", ")}` });
+    }
+    const user = await updateUserAppearance(req.user.id, {
+      theme,
+      accent: typeof accent === "string" && accent.startsWith("#") ? accent.toLowerCase() : accent,
+      tint,
+    });
+    const body = publicUser(user);
+
+    // Every OTHER open session of this person — another tab, the laptop at
+    // home — repaints at once instead of on its next reload. Scoped to their
+    // own user room, so nobody else ever receives it. The originating tab
+    // names itself so it can ignore its own echo.
+    try {
+      getIO().to(`user:${req.user.id}`).emit("appearance:changed", {
+        appearance: body.appearance,
+        origin: typeof req.get("X-Client-Id") === "string" ? req.get("X-Client-Id").slice(0, 64) : null,
+      });
+    } catch {
+      /* socket layer not up (tests) — the saved value is what matters */
+    }
+    res.json({ user: body });
   } catch (err) { next(err); }
 });
 

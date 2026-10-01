@@ -9,6 +9,17 @@
   --accent: #2FA34F;
   --accent-ink: #07170a;
   --accent-soft: #2FA34F22;
+  /* Meaning-carrying greens, split from --accent. --accent is the person's
+     own choice (Appearance → Accent colour) and tints interactive chrome;
+     these stay brand green whatever they pick, because they SAY something:
+     a clock time, a completed task. A red accent must not make finished work
+     look urgent. They equal the default accent, so nothing moves for anyone
+     who never changes it. */
+  --success: #2FA34F;
+  --success-ink: #07170a;
+  --success-soft: #2FA34F22;
+  --clock: #2FA34F;
+  --clock-soft: #2FA34F22;
   --stage-backlog: #7c8494;
   --stage-progress: #6e9bff;
   --stage-review: #2FA34F;
@@ -45,6 +56,11 @@
   --accent: #1F7D3B;
   --accent-ink: #ffffff;
   --accent-soft: #1F7D3B1a;
+  --success: #1F7D3B;
+  --success-ink: #ffffff;
+  --success-soft: #1F7D3B1a;
+  --clock: #1F7D3B;
+  --clock-soft: #1F7D3B1a;
   --stage-backlog: #767e91;
   --stage-progress: #3d6fe0;
   --stage-review: #1F7D3B;
@@ -81,6 +97,11 @@
   --accent: #1d7038;
   --accent-ink: #fffaf3;
   --accent-soft: #1d70381f;
+  --success: #1d7038;
+  --success-ink: #fffaf3;
+  --success-soft: #1d70381f;
+  --clock: #1d7038;
+  --clock-soft: #1d70381f;
   --stage-backlog: #8a7a66;
   --stage-progress: #a9631f;
   --stage-review: #1d7038;
@@ -96,6 +117,16 @@
   --chart-tooltip-bg: #fdf8f0;
   --backdrop: rgba(56, 42, 28, 0.38);
 }
+
+/* Native controls (time pickers, range sliders, any checkbox or radio the
+   browser draws) follow the personal accent too — the same thing macOS does,
+   and the difference between a theme and a coat of paint. */
+:root { accent-color: var(--accent); }
+::selection { background: var(--accent-soft); }
+
+/* A completed-state checkbox is a STATUS, not a control choice: it stays
+   green like every other "done" in the app. */
+.tfh-checkbox.checked.success { background: var(--success); border-color: var(--success); }
 
 * { box-sizing: border-box; }
 
@@ -311,6 +342,19 @@ body.tfh-resizing * { cursor: col-resize !important; }
   flex-shrink: 0; background: var(--raised); transition: all 0.12s ease;
 }
 .tfh-checkbox.checked { background: var(--accent); border-color: var(--accent); }
+
+/* Switching appearance cross-fades for a moment instead of snapping. The
+   class is put on <html> by ThemeContext only for the duration of a change —
+   leaving colour transitions on permanently would make every hover lag. */
+html.tfh-appearance-changing,
+html.tfh-appearance-changing *,
+html.tfh-appearance-changing *::before,
+html.tfh-appearance-changing *::after {
+  transition: background-color 0.24s ease, border-color 0.24s ease, color 0.24s ease, fill 0.24s ease, stroke 0.24s ease !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  html.tfh-appearance-changing, html.tfh-appearance-changing * { transition: none !important; }
+}
 
 .tfh-modal-backdrop {
   position: fixed; inset: 0; background: var(--backdrop);
@@ -573,3 +617,113 @@ body.tfh-resizing * { cursor: col-resize !important; }
 /* View switches (Dashboard -> Board -> Roadmap, etc.) already use
    tfh-fade-in with the keyframe defined above — a touch more life
    without overshooting. */
+
+/* ============================================================ */
+/* Appearance panel — theme tiles and accent swatches, after the */
+/* macOS System Settings pane.                                   */
+/* ============================================================ */
+.tfh-appearance {
+  position: absolute; right: 0; top: 44px; z-index: 30;
+  width: 318px; padding: 14px 14px 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+.tfh-appearance-heading {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--text-faint); margin-bottom: 8px;
+}
+.tfh-appearance-themes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.tfh-theme-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  background: none; border: none; padding: 0; cursor: pointer; color: var(--text-dim);
+  font: inherit;
+}
+.tfh-theme-tile-preview {
+  display: block; width: 100%; aspect-ratio: 3 / 2; border-radius: 7px; overflow: hidden;
+  /* Two rings: a hairline so every tile has an edge on any background, and
+     the accent ring for the selected one, offset so it never sits on top of
+     the preview itself. */
+  box-shadow: 0 0 0 1px var(--line);
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+.tfh-theme-tile:hover .tfh-theme-tile-preview { transform: translateY(-1px); }
+.tfh-theme-tile.active .tfh-theme-tile-preview { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+.tfh-theme-tile:focus-visible { outline: none; }
+.tfh-theme-tile:focus-visible .tfh-theme-tile-preview { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+.tfh-theme-tile-label { font-size: 11.5px; font-weight: 500; }
+.tfh-theme-tile.active .tfh-theme-tile-label { color: var(--text); font-weight: 600; }
+.tfh-appearance-hint { font-size: 11px; color: var(--text-faint); margin-top: 8px; min-height: 14px; }
+
+/* Ten presets plus custom on ONE line, as macOS draws it: 11 × 18px with
+   8px gaps is 278px, inside the panel's 290px content width. */
+.tfh-accent-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tfh-accent-swatch {
+  position: relative; width: 18px; height: 18px; border-radius: 999px; flex-shrink: 0;
+  border: none; padding: 0; cursor: pointer; background: var(--swatch);
+  /* A faint inner edge keeps pale swatches (yellow, graphite) from melting
+     into a light panel. */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  transition: transform 0.12s ease, box-shadow 0.15s ease;
+}
+.tfh-accent-swatch:hover { transform: scale(1.12); }
+/* Selected: the macOS treatment — a ring in the colour itself, separated
+   from the swatch by a gap, and a white dot in the middle. */
+.tfh-accent-swatch.active {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), 0 0 0 2px var(--panel), 0 0 0 4px var(--swatch);
+}
+.tfh-accent-swatch.active::after {
+  content: ""; position: absolute; inset: 0; margin: auto; width: 6px; height: 6px;
+  border-radius: 999px; background: #fff; box-shadow: 0 0 1px rgba(0, 0, 0, 0.4);
+}
+.tfh-accent-swatch:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--text-dim); }
+
+/* Custom: a colour wheel until a custom colour is chosen, then that colour
+   with a thin wheel ring so it still reads as "the custom one". */
+.tfh-accent-swatch.custom {
+  background: conic-gradient(#ff3b30, #ff9500, #ffcc00, #34c759, #30b0c7, #007aff, #af52de, #ff2d55, #ff3b30);
+  display: inline-block;
+}
+.tfh-accent-swatch.custom.active {
+  background: radial-gradient(circle, var(--swatch) 0 5.5px, transparent 6px),
+              conic-gradient(#ff3b30, #ff9500, #ffcc00, #34c759, #30b0c7, #007aff, #af52de, #ff2d55, #ff3b30);
+}
+.tfh-accent-swatch.custom input[type="color"] {
+  position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
+  border: none; padding: 0;
+}
+.tfh-appearance-accent-name { font-size: 12px; color: var(--text-dim); margin-top: 9px; min-height: 16px; }
+
+/* Segmented control for the tint level — one track, the selected segment
+   raised on it, the way macOS draws a small multi-way choice. */
+.tfh-segmented {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px;
+  padding: 2px; border-radius: 8px; background: var(--raised);
+  border: 1px solid var(--line);
+}
+.tfh-segment {
+  border: none; background: transparent; cursor: pointer; font: inherit;
+  font-size: 11.5px; font-weight: 500; color: var(--text-dim);
+  padding: 5px 0; border-radius: 6px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.tfh-segment:hover { color: var(--text); }
+.tfh-segment.active {
+  background: var(--panel); color: var(--text); font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--line);
+}
+.tfh-segment:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.tfh-appearance-footer {
+  display: flex; align-items: flex-end; gap: 10px; margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px; line-height: 1.45; color: var(--text-faint);
+}
+.tfh-appearance-footer > span { flex: 1; }
+.tfh-appearance-reset {
+  flex-shrink: 0; background: none; border: none; padding: 2px 0; cursor: pointer;
+  font: inherit; font-size: 11.5px; font-weight: 600; color: var(--accent);
+}
+.tfh-appearance-reset:hover { text-decoration: underline; }
+
+@media (max-width: 520px) {
+  .tfh-appearance { position: fixed; left: 12px; right: 12px; top: 64px; width: auto; }
+}

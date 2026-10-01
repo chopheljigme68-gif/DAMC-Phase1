@@ -673,3 +673,41 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
 -- the moment to introduce the join table.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_2_id UUID REFERENCES users(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_2 ON tasks(assignee_2_id) WHERE assignee_2_id IS NOT NULL;
+
+
+/* ---------------- personal appearance: theme + accent colour ---------------- */
+-- Each person's own look, stored on THEIR account so it follows them to any
+-- computer and survives signing out. Never shown to or applied for anyone
+-- else — /users/me is the only place it is read.
+-- Both nullable: NULL means "not chosen yet", which the client distinguishes
+-- from an explicit choice so a device's existing theme can be adopted on first
+-- sign-in instead of being overwritten with a default.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preference TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS accent_color TEXT;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_theme_preference_check') THEN
+    ALTER TABLE users ADD CONSTRAINT users_theme_preference_check
+      CHECK (theme_preference IS NULL OR theme_preference IN ('system', 'light', 'warm', 'dark'));
+  END IF;
+  -- A preset name, or a #rrggbb colour. Validated in the route as well; this
+  -- is the guarantee if anything ever writes around it.
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_accent_color_check') THEN
+    ALTER TABLE users ADD CONSTRAINT users_accent_color_check
+      CHECK (accent_color IS NULL OR accent_color ~ '^(damc|blue|indigo|purple|pink|red|orange|yellow|teal|graphite|#[0-9a-fA-F]{6})$');
+  END IF;
+END $$;
+
+/* ---------------- background tint strength ---------------- */
+-- How strongly the accent colours the page, cards and dividers: off, subtle
+-- or rich. NULL = never chosen, which the client resolves per accent (off for
+-- the default DAMC Green, subtle for any other colour) so the stock look is
+-- unchanged for anyone who has never opened the Appearance panel.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS accent_tint TEXT;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_accent_tint_check') THEN
+    ALTER TABLE users ADD CONSTRAINT users_accent_tint_check
+      CHECK (accent_tint IS NULL OR accent_tint IN ('off', 'subtle', 'rich'));
+  END IF;
+END $$;
