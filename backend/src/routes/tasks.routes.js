@@ -205,7 +205,9 @@ router.post("/bulk", async (req, res, next) => {
       const subtasks = Array.isArray(t.subtasks) ? t.subtasks.filter(Boolean).map((s) => ({ text: s, done: false })) : [];
 
       const task = await createTask({
-        title: taskTitle, description: "", status: "todo", priority: t.priority || priority || "medium",
+        // Indented detail lines arrive as `description` now that subtasks are
+        // switched off in the UI; `subtasks` is still honoured if sent.
+        title: taskTitle, description: typeof t.description === "string" ? t.description.slice(0, 5000) : "", status: "todo", priority: t.priority || priority || "medium",
         assigneeId: t.assigneeId, due: t.due || due, dueTime: taskTime, subtasks,
         createdBy: req.user.id, workspaceId: req.params.workspaceId, projectId: req.params.projectId,
       });

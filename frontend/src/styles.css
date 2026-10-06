@@ -271,11 +271,22 @@ body.tfh-resizing * { cursor: col-resize !important; }
 /* Rename/delete actions on a sidebar project — kept out of the way until
    you're on the row, so the sidebar stays a list of projects rather than a
    list of buttons. Always visible on touch, where there's no hover. */
-.tfh-project-actions { opacity: 0; transition: opacity 0.12s ease; }
+/* The actions FLOAT over the end of the row instead of reserving width, so
+   a project name gets the whole row until you point at it — with three
+   actions (file away, edit, delete) the reserved space was eating half the
+   name in a default-width sidebar. */
+.tfh-project-row { position: relative; }
+.tfh-project-actions {
+  position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+  padding: 1px 2px; border-radius: 7px;
+  background: var(--raised); box-shadow: -10px 0 10px -4px var(--raised);
+  opacity: 0; pointer-events: none; transition: opacity 0.12s ease;
+}
 .tfh-project-row:hover .tfh-project-actions,
-.tfh-project-row:focus-within .tfh-project-actions { opacity: 1; }
+.tfh-project-row:focus-within .tfh-project-actions { opacity: 1; pointer-events: auto; }
 @media (hover: none) {
-  .tfh-project-actions { opacity: 1; }
+  /* Touch: no hover, so the actions sit in the row as before. */
+  .tfh-project-actions { position: static; transform: none; opacity: 1; pointer-events: auto; background: none; box-shadow: none; }
 }
 
 /* Global search in the top bar. Sized to sit between the date and the
@@ -726,4 +737,63 @@ html.tfh-appearance-changing *::after {
 
 @media (max-width: 520px) {
   .tfh-appearance { position: fixed; left: 12px; right: 12px; top: 64px; width: auto; }
+}
+
+/* ---------- Milestones: the form the Chief drew, and the list ---------- */
+/* Three columns: Date | Title | Project, then Details | Link name | URL.
+   Collapses to one column on a phone without any of it being lost. */
+.tfh-milestone-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 14px;
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .tfh-milestone-grid { grid-template-columns: 1fr; }
+}
+.tfh-milestone-row {
+  display: flex; gap: 16px; align-items: flex-start;
+  padding: 14px 16px;
+  border-top: 1px solid var(--line);
+}
+.tfh-milestone-row:first-child { border-top: none; }
+.tfh-milestone-row:hover { background: var(--raised); }
+.tfh-milestone-row.past .tfh-milestone-when { opacity: 0.85; }
+.tfh-milestone-when { width: 150px; flex-shrink: 0; padding-top: 1px; }
+@media (max-width: 640px) {
+  .tfh-milestone-row { flex-wrap: wrap; gap: 6px 12px; }
+  .tfh-milestone-when { width: 100%; }
+}
+.tfh-milestone-link {
+  background: var(--accent-soft); color: var(--accent); text-decoration: none;
+  max-width: 300px; gap: 5px;
+}
+.tfh-milestone-link:hover { text-decoration: underline; }
+
+/* ---------- Completed Projects folder + drag targets ---------- */
+.tfh-completed-folder {
+  display: flex; align-items: center; gap: 2px; border-radius: 9px;
+}
+.tfh-completed-list {
+  display: flex; flex-direction: column; gap: 2px;
+  margin-left: 12px; padding-left: 6px;
+  border-left: 1px solid var(--line);
+}
+/* While a project is held, the folder it can go to is outlined, and lights
+   up when the pointer is over it — so the target is obvious before you let go. */
+.tfh-drop-target {
+  outline: 1px dashed var(--line);
+  outline-offset: -1px;
+  transition: background 0.12s ease, outline-color 0.12s ease;
+}
+.tfh-drop-target.hot {
+  outline: 2px solid var(--success);
+  background: var(--success-soft);
+}
+.tfh-sidebar-notice {
+  display: flex; align-items: center; gap: 6px;
+  margin: 4px 2px; padding: 6px 8px 6px 10px;
+  border-radius: 8px; background: var(--raised);
+  font-size: 11px; color: var(--text-dim); line-height: 1.4;
+  animation: tfhExpandIn 0.2s ease;
 }

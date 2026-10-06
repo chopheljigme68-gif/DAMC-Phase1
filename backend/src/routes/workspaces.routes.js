@@ -3,6 +3,7 @@ const {
   getWorkspacesForUser, createWorkspace, renameWorkspace, getWorkspaceById, getWorkspaceMembers, getUserByEmail,
   addWorkspaceMember, setMemberRole, updateMemberTitle, removeMember, countAdmins, createInvite, getMembership,
   getWorkspaceWorkload, getHolidays, addHoliday, deleteHoliday, getHolidayById, getAllTasksForWorkspace, getOrCreateGeneralProject,
+  getWorkspaceMilestones,
 } = require("../db");
 const { authenticate } = require("../auth");
 const { requireWorkspaceMember, requireRole, requirePlatformAdmin } = require("../middleware/workspace");
@@ -223,6 +224,14 @@ router.get("/:workspaceId/tasks", authenticate, requireWorkspaceMember, async (r
 // Get-or-create the workspace's "General" project (for tasks with no
 // specific project). Open to any member, since any member can create a
 // task and therefore may need to file one under General.
+// Every milestone in the workspace, with its project — the Milestones page.
+// Readable by every member, like each project's own milestone list.
+router.get("/:workspaceId/milestones", authenticate, requireWorkspaceMember, async (req, res, next) => {
+  try {
+    res.json({ milestones: await getWorkspaceMilestones(req.params.workspaceId) });
+  } catch (err) { next(err); }
+});
+
 router.post("/:workspaceId/general-project", authenticate, requireWorkspaceMember, async (req, res, next) => {
   try {
     const projectId = await getOrCreateGeneralProject(req.params.workspaceId, req.user.id);

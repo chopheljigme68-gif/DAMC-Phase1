@@ -4,6 +4,7 @@ const {
   getProjectsForWorkspace, createProject, deleteProject, getProjectById, setProjectComplete, setProjectLead, updateProject, reorderProjects,
   getProjectMembers, addProjectMember, removeProjectMember, getMembership,
   getMilestones, getMilestoneById, createMilestone, updateMilestone, deleteMilestoneById, reorderMilestone,
+  moveMilestoneToProject,
   addMilestoneLink, deleteMilestoneLink,
   getAttachmentsForMilestone, getMilestoneAttachmentById, addMilestoneAttachment, deleteMilestoneAttachment,
   getDocumentsForProject, getDocumentById, addDocument, deleteDocument,
@@ -130,13 +131,24 @@ router.get("/:projectId/milestones", requireProjectInWorkspace, async (req, res,
   } catch (err) { next(err); }
 });
 
+const HTTP_URL = /^https?:\/\/\S+$/i;
+
 router.post("/:projectId/milestones", requireProjectInWorkspace, requireProjectManager, async (req, res, next) => {
   try {
-    const { title, description, targetDate } = req.body || {};
+    const { title, description, targetDate, link } = req.body || {};
     if (!title || !title.trim()) return res.status(400).json({ error: "Milestone title is required" });
+    // The Milestones form takes one "Link to file" with the milestone itself.
+    // Validated BEFORE anything is written, so a bad link can't leave a
+    // milestone behind without the link the person thought they'd attached.
+    const linkUrl = link && typeof link.url === "string" ? link.url.trim() : "";
+    if (linkUrl && !HTTP_URL.test(linkUrl)) return res.status(400).json({ error: "The link to the file must start with http:// or https://" });
     const milestone = await createMilestone({
       projectId: req.params.projectId, title: title.trim(), description, targetDate, createdBy: req.user.id,
     });
+    if (linkUrl) {
+      const label = (typeof link.label === "string" && link.label.trim()) || linkUrl;
+      milestone.links = [await addMilestoneLink({ milestoneId: milestone.id, label, url: linkUrl, createdBy: req.user.id })];
+    }
     broadcastProjectsChanged(req.params.workspaceId);
     res.status(201).json({ milestone });
   } catch (err) { next(err); }
@@ -152,8 +164,22 @@ router.put("/:projectId/milestones/:milestoneId", requireProjectInWorkspace, req
   try {
     const existing = await assertMilestoneInProject(req.params.milestoneId, req.params.projectId);
     if (!existing) return res.status(404).json({ error: "Milestone not found" });
-    const { title, description, targetDate } = req.body || {};
+    const { title, description, targetDate, projectId: targetProjectId } = req.body || {};
     if (!title || !title.trim()) return res.status(400).json({ error: "Milestone title is required" });
+
+    // Moving it to another project: that project must be in this workspace
+    // and the person must be able to manage IT as well — managing the source
+    // project alone doesn't entitle you to add to someone else's.
+    if (targetProjectId && targetProjectId !== req.params.projectId) {
+      const target = await getProjectById(targetProjectId);
+      if (!target || target.workspaceId !== req.params.workspaceId) return res.status(400).json({ error: "That project isn't in this workspace" });
+      const isWorkspaceManager = req.membership.role === "admin" || req.membership.role === "lead";
+      if (!isWorkspaceManager && target.leadId !== req.user.id) {
+        return res.status(403).json({ error: "You can only move a milestone to a project you manage" });
+      }
+      await moveMilestoneToProject(req.params.milestoneId, targetProjectId);
+    }
+
     const milestone = await updateMilestone(req.params.milestoneId, { title: title.trim(), description, targetDate });
     broadcastProjectsChanged(req.params.workspaceId);
     res.json({ milestone });

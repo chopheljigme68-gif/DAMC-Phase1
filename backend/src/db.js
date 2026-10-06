@@ -505,6 +505,43 @@ async function getMilestones(projectId) {
   }));
 }
 
+// Every milestone in the workspace, across all projects, each carrying its
+// project's name — the Milestones page lists them in one place with a
+// project column, rather than one project at a time. Newest date first;
+// undated ones last. Links and legacy files are batched (three queries in
+// all, not N+1).
+async function getWorkspaceMilestones(workspaceId) {
+  const { rows } = await pool.query(
+    `SELECT m.id, m.project_id AS "projectId", m.title, m.description,
+            to_char(m.target_date, 'YYYY-MM-DD') AS "targetDate", m.position,
+            m.created_by AS "createdBy", cu.name AS "createdByName", m.updated_at AS "updatedAt",
+            p.name AS "projectName", p.completed_at AS "projectCompletedAt", p.lead_id AS "projectLeadId"
+     FROM project_milestones m
+     JOIN projects p ON p.id = m.project_id
+     LEFT JOIN users cu ON cu.id = m.created_by
+     WHERE p.workspace_id = $1
+     ORDER BY m.target_date DESC NULLS LAST, m.updated_at DESC`,
+    [workspaceId]
+  );
+  const ids = rows.map((r) => r.id);
+  if (ids.length === 0) return [];
+  const links = await pool.query(`${MILESTONE_LINK_SELECT} WHERE milestone_id = ANY($1) ORDER BY position ASC, created_at ASC`, [ids]);
+  const attachments = await pool.query(`${MILESTONE_ATTACHMENT_SELECT} WHERE a.milestone_id = ANY($1) ORDER BY a.created_at ASC`, [ids]);
+  return rows.map((m) => ({
+    ...m,
+    links: links.rows.filter((l) => l.milestoneId === m.id),
+    attachments: attachments.rows.filter((a) => a.milestoneId === m.id),
+  }));
+}
+
+// Re-files a milestone under another project (picked in the edit form). It
+// goes to the end of that project's sequence; its links and files travel
+// with it because they hang off the milestone, not the project.
+async function moveMilestoneToProject(id, projectId) {
+  const { rows: posRows } = await pool.query("SELECT COALESCE(MAX(position), -1) + 1 AS next FROM project_milestones WHERE project_id = $1", [projectId]);
+  await pool.query("UPDATE project_milestones SET project_id = $2, position = $3, updated_at = now() WHERE id = $1", [id, projectId, posRows[0].next]);
+}
+
 async function getMilestoneById(id) {
   const { rows } = await pool.query(
     `SELECT id, project_id AS "projectId", title, description, to_char(target_date, 'YYYY-MM-DD') AS "targetDate",
@@ -1550,6 +1587,7 @@ module.exports = {
   getProjectsForWorkspace, getProjectById, createProject, getOrCreateGeneralProject, deleteProject, setProjectComplete, setProjectLead, updateProject, reorderProjects, getRoadmapData,
   getProjectMembers, addProjectMember, removeProjectMember,
   getMilestones, getMilestoneById, createMilestone, updateMilestone, deleteMilestoneById, reorderMilestone,
+  getWorkspaceMilestones, moveMilestoneToProject,
   addMilestoneLink, deleteMilestoneLink,
   getAttachmentsForMilestone, getMilestoneAttachmentById, addMilestoneAttachment, deleteMilestoneAttachment,
   getTasks, getAllTasksForWorkspace, getTaskById, createTask, updateTask, replaceSubtasks, deleteTask, getSubtaskById,

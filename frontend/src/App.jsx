@@ -1,10 +1,11 @@
-import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import {
   LayoutDashboard, SquareKanban, Users, CalendarDays, Search, Plus, X, Check,
   Flag, ChevronLeft, ChevronRight, Trash2, Menu,
   Bell, BadgeCheck, Sun, Moon, LogOut, AlertTriangle, Loader2, RefreshCw,
   UserPlus, ChevronDown, ChevronUp, Building2, Shield, FolderKanban, Lock,
+  FolderCheck, ArchiveRestore,
   Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, NotebookPen, Table as TableIcon, CheckCircle2, UserX, Repeat, CalendarRange, Monitor, Sunset,
 } from "lucide-react";
 import {
@@ -43,6 +44,22 @@ const PRIORITIES = {
   high: { label: "Urgent", color: "var(--pri-high)" },
 };
 const isUrgent = (level) => level === "high";
+// Subtasks are switched off at the Chief's request ("not of much use for
+// now — we will reinstate in future if really required"). This hides every
+// subtask control; it does NOT touch data: existing subtasks stay in the
+// database, are kept on save, and still appear in the Word report. Flip this
+// to true to bring the whole feature back exactly as it was.
+const SUBTASKS_ENABLED = false;
+
+// Uploading files is switched off on purpose: the Chief wants everyone in the
+// habit of sharing the Google Drive link instead, so there is one copy of a
+// document, in Drive, rather than a stale upload here. Every "Add file" /
+// "Upload file" control and drop zone reads this flag. Files uploaded BEFORE
+// the switch are still listed, still open, and can still be removed — nothing
+// is hidden or lost. The upload endpoints are left in place on the server so
+// turning this back on is a one-line change.
+const FILE_UPLOADS_ENABLED = false;
+
 const NAV = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "board", label: "Board", icon: SquareKanban },
@@ -52,6 +69,11 @@ const NAV = [
   { id: "calendar", label: "Calendar", icon: CalendarDays },
   { id: "admin", label: "Admin Panel", icon: Shield },
 ];
+// The nav items grouped under DASHBOARD at the top of the sidebar, above the
+// project list. They render in NAV order: Dashboard, (Initiate
+// Collaboration), Board, Files.
+const TOP_NAV_IDS = ["dashboard", "activity", "board", "files"];
+
 const NOTIF_LABEL = {
   assigned: "assigned you a task",
   reassigned: "reassigned a task to you",
@@ -326,6 +348,13 @@ const Logo = ({ size = 30 }) => (
 // context rather than props because "assigned by" appears on rows rendered
 // from half a dozen places, and threading these through every one of them
 // would be the kind of change that gets forgotten in exactly one spot.
+// Whose list a row is being rendered in — set by the person's own dashboard
+// sections and by each card in Team Members. Read by AssignedByChip, so the
+// "from …" attribution is judged against the right person on a shared
+// (two-assignee) activity. A context rather than a prop for the same reason
+// ViewerContext is one: the chip sits under half a dozen list components.
+const AgendaOwnerContext = React.createContext(null);
+
 const ViewerContext = React.createContext({ viewerId: null, membersById: new Map() });
 
 // Shared across all <Avatar> instances so the same person's photo is only
@@ -403,8 +432,8 @@ const Spinner = ({ size = 22 }) => <Loader2 className="tfh-pulse" size={size} co
 /* ------------------------------------------------------------------ */
 const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, currentUserId, showProject }) => {
   const assignee = memberById(users, task.assigneeId);
-  const done = task.subtasks.filter((s) => s.done).length;
-  const total = task.subtasks.length;
+  const done = (task.subtasks || []).filter((s) => s.done).length;
+  const total = (task.subtasks || []).length;
   const meta = dueMeta(task.due, task.status);
   const isDone = task.status === "done";
   // A manager can toggle any card's completion. A plain member can toggle
@@ -458,7 +487,7 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
             <Repeat size={10} /> Repeats
           </span>
         )}
-        {total > 0 && (
+        {SUBTASKS_ENABLED && total > 0 && (
           <span className="tfh-chip tfh-mono" style={{ background: "var(--raised)", color: "var(--text-dim)" }}>
             {done}/{total}
           </span>
@@ -651,9 +680,13 @@ const Attachments = ({ workspaceId, projectId, taskId, canAttach }) => {
     }
   };
 
+  // With uploads off, this section only exists to keep files uploaded before
+  // the switch reachable. A task that never had one shows nothing at all.
+  if (!FILE_UPLOADS_ENABLED && !loading && items.length === 0 && !error) return null;
+
   return (
     <div style={{ marginBottom: 20 }}>
-      <label className="tfh-label">Attachments</label>
+      <label className="tfh-label">{FILE_UPLOADS_ENABLED ? "Attachments" : "Files uploaded earlier"}</label>
       {loading ? (
         <div style={{ fontSize: 12, color: "var(--text-faint)", padding: "6px 0" }}>Loading…</div>
       ) : (
@@ -664,7 +697,7 @@ const Attachments = ({ workspaceId, projectId, taskId, canAttach }) => {
           {items.length === 0 && <div style={{ fontSize: 12, color: "var(--text-faint)" }}>No files yet.</div>}
         </div>
       )}
-      {canAttach && (
+      {canAttach && FILE_UPLOADS_ENABLED && (
         <>
           <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => handleFiles(e.target.files)} />
           <button type="button" className="tfh-btn" style={{ fontSize: 12.5 }} onClick={() => fileInputRef.current?.click()} disabled={uploading}>
@@ -755,7 +788,7 @@ const Links = ({ workspaceId, projectId, taskId, canAttach }) => {
   return (
     <div style={{ marginBottom: 20 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <label className="tfh-label">Links</label>
+        <label className="tfh-label">File Links</label>
         {canAttach && (
           <button type="button" onClick={() => setBulkMode((v) => !v)} style={{ background: "none", border: "none", color: "var(--accent)", fontSize: 11, padding: 0, marginBottom: 6 }}>
             {bulkMode ? "Add one at a time" : "Paste multiple"}
@@ -775,7 +808,7 @@ const Links = ({ workspaceId, projectId, taskId, canAttach }) => {
               {canAttach && <button type="button" onClick={() => remove(l.id)} className="tfh-btn tfh-btn-ghost" style={{ padding: 5 }} aria-label="Remove link"><X size={13} color="var(--text-faint)" /></button>}
             </div>
           ))}
-          {items.length === 0 && <div style={{ fontSize: 12, color: "var(--text-faint)" }}>No links yet.</div>}
+          {items.length === 0 && <div style={{ fontSize: 12, color: "var(--text-faint)" }}>No links yet{canAttach ? " — paste the Google Drive link to the file below." : "."}</div>}
         </div>
       )}
       {canAttach && (
@@ -793,7 +826,7 @@ const Links = ({ workspaceId, projectId, taskId, canAttach }) => {
         ) : (
           <form onSubmit={submit} style={{ display: "flex", gap: 6 }}>
             <input className="tfh-input" placeholder="Label (optional)" value={label} onChange={(e) => setLabel(e.target.value)} style={{ flex: "0 0 40%" }} />
-            <input className="tfh-input" placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <input className="tfh-input" placeholder="https://drive.google.com/…" value={url} onChange={(e) => setUrl(e.target.value)} />
             <button className="tfh-btn" disabled={adding || !url.trim()} style={{ flexShrink: 0 }}><Plus size={14} /></button>
           </form>
         )
@@ -1252,6 +1285,7 @@ const PendingFilesLinks = ({ draft, setDraft }) => {
 
   return (
     <div className="tfh-card" style={{ padding: 16, marginBottom: 18 }}>
+      {FILE_UPLOADS_ENABLED && (<>
       <label className="tfh-label">Files</label>
       {draft.pendingFiles.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 6 }}>
@@ -1269,8 +1303,12 @@ const PendingFilesLinks = ({ draft, setDraft }) => {
         <Upload size={11} /> Add file
       </button>
       {fileError && <div style={{ fontSize: 11, color: "var(--pri-high)", marginBottom: 14 }}>{fileError}</div>}
+      </>)}
 
-      <label className="tfh-label">Links</label>
+      <label className="tfh-label">File Links</label>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", margin: "-2px 0 8px", lineHeight: 1.45 }}>
+        Paste the Google Drive link to the file or folder — everyone opens the same copy.
+      </div>
       {draft.pendingLinks.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 6 }}>
           {draft.pendingLinks.map((l, i) => (
@@ -1284,7 +1322,11 @@ const PendingFilesLinks = ({ draft, setDraft }) => {
       )}
       <div style={{ display: "flex", gap: 6 }}>
         <input value={linkLabel} onChange={(e) => setLinkLabel(e.target.value)} placeholder="Label" className="tfh-input" style={{ fontSize: 12, flex: "0 0 36%" }} />
-        <input value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://…" className="tfh-input" style={{ fontSize: 12 }} />
+        <input
+          value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://drive.google.com/…" className="tfh-input" style={{ fontSize: 12 }}
+          // Enter adds the link rather than submitting the whole dialog.
+          onKeyDown={(e) => { if (e.key === "Enter") addLink(e); }}
+        />
         <button type="button" onClick={addLink} className="tfh-btn tfh-btn-ghost" style={{ padding: "4px 9px", flexShrink: 0 }} aria-label="Add link"><Plus size={12} /></button>
       </div>
     </div>
@@ -1542,6 +1584,7 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
           style={{ marginBottom: 18, resize: "vertical", opacity: canEditFields ? 1 : 0.7 }}
         />
 
+        {SUBTASKS_ENABLED && (<>
         <label className="tfh-label">Subtasks <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>— mini tasks of their own, each with a time, description, files, and links</span></label>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
           {draft.subtasks.map((s) => (
@@ -1561,6 +1604,7 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
             )}
           </div>
         )}
+        </>)}
 
         {/* Who / when sits directly under "Add subtask" — the three fields
             people fill in on almost every task, kept together and above the
@@ -1646,7 +1690,9 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
           >
             <option value="" disabled>Choose a project…</option>
             <option value="__general__">No Specific Project (General)</option>
-            {projects.filter((p) => p.name !== "General").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {/* Completed projects are filed away — new work doesn't go into
+                them. A task already in one keeps it listed so it still shows. */}
+            {projects.filter((p) => p.name !== "General" && (!p.completedAt || p.id === draft.projectId)).map((p) => <option key={p.id} value={p.id}>{p.name}{p.completedAt ? " (completed)" : ""}</option>)}
           </select>
           {draft.id && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>You can move this task to a different project if it was filed by mistake.</div>}
         </div>
@@ -1805,7 +1851,14 @@ const BulkAddModal = ({ users, projects, currentProjectId, currentUserId, onClos
     setBusy(true);
     setError("");
     try {
-      await onSubmit({ tasks: parsed.map((t) => ({ title: t.title, assigneeId: t.assigneeId, subtasks: t.subtasks })), due, priority, projectId });
+      // With subtasks switched off, the indented detail lines under a task
+      // go into its description as bullets instead — nothing pasted is lost.
+      await onSubmit({
+        tasks: parsed.map((t) => (SUBTASKS_ENABLED
+          ? { title: t.title, assigneeId: t.assigneeId, subtasks: t.subtasks }
+          : { title: t.title, assigneeId: t.assigneeId, subtasks: [], description: t.subtasks.map((line) => `• ${line}`).join("\n") })),
+        due, priority, projectId,
+      });
       onClose();
     } catch (err) {
       setError(err.message);
@@ -1824,8 +1877,8 @@ const BulkAddModal = ({ users, projects, currentProjectId, currentUserId, onClos
         <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 18, lineHeight: 1.5 }}>
           Paste one line per task. Start a line with a name to assign it to that
           person — e.g. <span className="tfh-mono">Leo: fix the Safari bug</span> — otherwise it
-          goes to whoever's picked below. Indent a line underneath a task to make
-          it a subtask instead of a new task. A leading time like{" "}
+          goes to whoever's picked below. Indent a line underneath a task to add
+          it to that task's {SUBTASKS_ENABLED ? "subtasks" : "description"} instead of making a new task. A leading time like{" "}
           <span className="tfh-mono">9:00 AM</span> is pulled into its own field automatically.
         </div>
 
@@ -1835,7 +1888,7 @@ const BulkAddModal = ({ users, projects, currentProjectId, currentUserId, onClos
             <select className="tfh-input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               <option value="" disabled>Choose a project…</option>
               <option value="__general__">No Specific Project (General)</option>
-              {projects.filter((p) => p.name !== "General").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {projects.filter((p) => p.name !== "General" && !p.completedAt).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
 
@@ -1882,7 +1935,7 @@ const BulkAddModal = ({ users, projects, currentProjectId, currentUserId, onClos
                     <Avatar member={member} size={20} />
                     <span style={{ fontSize: 12.5, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.title}</span>
                     {t.subtasks.length > 0 && (
-                      <span className="tfh-chip tfh-mono" style={{ background: "var(--panel)", color: "var(--text-faint)", flexShrink: 0 }}>{t.subtasks.length} sub</span>
+                      <span className="tfh-chip tfh-mono" style={{ background: "var(--panel)", color: "var(--text-faint)", flexShrink: 0 }}>{SUBTASKS_ENABLED ? `${t.subtasks.length} sub` : `+${t.subtasks.length} line${t.subtasks.length === 1 ? "" : "s"}`}</span>
                     )}
                   </div>
                 );
@@ -2639,15 +2692,26 @@ const buildUpcomingItems = (upcomingTasks, dateTone) =>
 // is a fraction of a row's width.
 const AssignedByChip = ({ task, compact }) => {
   const { membersById } = useContext(ViewerContext);
+  const ownerId = useContext(AgendaOwnerContext);
   if (!task?.createdBy || !task.createdByName) return null;
-  // The test is "did this person enter it themselves?", NOT "did the person
-  // looking at the screen create it". Those are the same thing on your own
-  // dashboard and different everywhere else: a supervisor reading the Team
-  // column needs to see that HE is the one who gave Sonam that task, and the
-  // viewer-based test hid exactly that. "If I input the task by myself, no
-  // need to show it" — so hide it only when creator and assignee are one
-  // person.
-  if (task.assigneeId && task.createdBy === task.assigneeId) return null;
+  // The question is "did THIS person enter it themselves?" — never "did the
+  // person looking at the screen create it" (that hid the attribution in the
+  // Team column, where a supervisor needs to see he gave the task out).
+  //
+  // Which person? Whoever the row is being shown FOR. A list that belongs to
+  // someone (your dashboard, a member's card in Team Members) says so through
+  // AgendaOwnerContext. Comparing against assignee 1 only was the Assignee 2
+  // bug: Sonam creates an activity for herself and Karma, and on KARMA's card
+  // the chip was hidden because Sonam is assignee 1 — exactly the case where
+  // Karma needs to see who gave it to him.
+  if (ownerId && isAssignedTo(task, ownerId)) {
+    if (task.createdBy === ownerId) return null;
+  } else {
+    // No owner (board cards, mixed lists): hide only when EVERY assignee is
+    // the creator, i.e. it's purely self-entered work.
+    const assignees = [task.assigneeId, task.assignee2Id].filter(Boolean);
+    if (assignees.length > 0 && assignees.every((id) => id === task.createdBy)) return null;
+  }
 
   // The roster entry carries the colour, initials and photo. Falling back to
   // a name-only member keeps the chip working for someone who has since left
@@ -2970,7 +3034,9 @@ const TeamMemberAgenda = ({ member, items, onOpen, onOpenActivity, emptyText, on
       {expanded && (
         <div className="tfh-expand-in" style={{ marginTop: 10 }}>
           {items.length > 0 ? (
-            <GroupedAgenda items={items} onOpen={onOpen} onOpenActivity={onOpenActivity} />
+            <AgendaOwnerContext.Provider value={member.id}>
+              <GroupedAgenda items={items} onOpen={onOpen} onOpenActivity={onOpenActivity} />
+            </AgendaOwnerContext.Provider>
           ) : (
             <div style={{ fontSize: 11.5, color: "var(--text-faint)", padding: "0 8px" }}>{emptyText}</div>
           )}
@@ -3085,7 +3151,9 @@ const AllTeamsCollabsPanel = ({ workspaceId, day, setDay, tasks, users, currentU
                 <Avatar member={item.person} size={22} />
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <AgendaRow item={item} onOpen={onOpen} onOpenActivity={onOpenActivity} />
+                <AgendaOwnerContext.Provider value={item.person?.id || null}>
+                  <AgendaRow item={item} onOpen={onOpen} onOpenActivity={onOpenActivity} />
+                </AgendaOwnerContext.Provider>
               </div>
             </div>
           ))}
@@ -3451,6 +3519,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
   );
 
   return (
+    <AgendaOwnerContext.Provider value={currentUser?.id || null}>
     <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 22 }}>
       <div>
         <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>DAMC Collaboration Dashboard</div>
@@ -3519,6 +3588,7 @@ const DashboardView = ({ workspaceId, tasks, users, currentUser, onOpen, hasProj
         />
       )}
     </div>
+    </AgendaOwnerContext.Provider>
   );
 };
 
@@ -3638,7 +3708,12 @@ const BoardView = ({ tasks, users, projects, onOpen, onComplete, onReopen, onAdd
         </div>
         <select className="tfh-input" style={{ width: "auto" }} value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)}>
           <option value="all">All projects</option>
-          {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {projects.filter((p) => !p.completedAt).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {projects.some((p) => p.completedAt) && (
+            <optgroup label="Completed Projects">
+              {projects.filter((p) => p.completedAt).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </optgroup>
+          )}
         </select>
         <NewProjectButton onCreateProject={onCreateProject} />
         <select className="tfh-input" style={{ width: "auto" }} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
@@ -3817,7 +3892,7 @@ const ReportPanel = ({ workspaceId, users, projects, currentUser, canManage }) =
       </div>
       <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 14, lineHeight: 1.5 }}>
         A full record on DAMC letterhead, project by project: every activity with its dates, times,
-        status, description, meeting notes, subtasks, comments, files and links — plus each person's
+        status, description, meeting notes, comments, files and links — plus each person's
         logged activities. Leave the dates empty for everything on record.
       </div>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
@@ -5184,8 +5259,9 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
 
+  const canUpload = canManage && FILE_UPLOADS_ENABLED;
   const onDragEnter = (e) => {
-    if (!canManage || !e.dataTransfer?.types?.includes("Files")) return;
+    if (!canUpload || !e.dataTransfer?.types?.includes("Files")) return;
     e.preventDefault();
     dragDepth.current += 1;
     setDragging(true);
@@ -5195,12 +5271,12 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
     if (dragDepth.current === 0) setDragging(false);
   };
   const onDragOver = (e) => {
-    if (!canManage || !e.dataTransfer?.types?.includes("Files")) return;
+    if (!canUpload || !e.dataTransfer?.types?.includes("Files")) return;
     e.preventDefault(); // without this the browser just opens the file
     e.dataTransfer.dropEffect = "copy";
   };
   const onDrop = (e) => {
-    if (!canManage) return;
+    if (!canUpload) return;
     e.preventDefault();
     dragDepth.current = 0;
     setDragging(false);
@@ -5277,7 +5353,7 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>Files</div>
-          <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>Reference documents and links, kept per project — visible to everyone here, not tied to a single task.</div>
+          <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>Google Drive links and reference material, kept per project — visible to everyone here, not tied to a single task.</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           {/* Pick which project's files you're looking at, without leaving
@@ -5297,7 +5373,7 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
               ))}
             </select>
           </div>
-          {canManage && (
+          {canUpload && (
             <>
               <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => handleFiles(e.target.files)} />
               <button className="tfh-btn tfh-btn-accent" onClick={() => fileInputRef.current?.click()} disabled={uploading || !selectedId}>
@@ -5321,21 +5397,43 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
 
       {loading ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 30, justifyContent: "center" }}><Spinner /> <span style={{ fontSize: 13, color: "var(--text-dim)" }}>Loading files…</span></div>
-      ) : items.length === 0 && taskFiles.length === 0 ? (
-        <div className="tfh-card" style={{ padding: 30, textAlign: "center" }}>
-          <FolderOpen size={22} color="var(--text-faint)" style={{ marginBottom: 8 }} />
-          <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
-            {canManage
-              ? `No files in ${selectedProject?.name || "this project"} yet — drag files here, or use Upload file, for circulars, guidelines and reference material.`
-              : `No files in ${selectedProject?.name || "this project"} yet.`}
-          </div>
-        </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {items.map((doc) => (
-            <DocumentRow key={doc.id} doc={doc} workspaceId={workspaceId} projectId={selectedId} canManage={canManage} onRemove={() => remove(doc.id)} />
-          ))}
-        </div>
+        <>
+          {/* FILES — the project's own Google Drive links. First on the page,
+              above "From activities", because this is the project's shelf;
+              the activity files below are a by-product of individual collabs.
+              (Same project-links data the Milestones page used to show as
+              "Project reference links" — it lives here only now.) */}
+          <div className="tfh-card" style={{ padding: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <FolderOpen size={14} color="var(--accent)" />
+              <span style={{ fontSize: 13, fontWeight: 700 }}>Files</span>
+              {links.length > 0 && <span className="tfh-chip" style={{ fontSize: 10, background: "var(--raised)", color: "var(--text-dim)" }}>{links.length}</span>}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 10 }}>
+              {canManage
+                ? "Paste the Google Drive link to a file or folder (or a Sheet, or any URL). Give it a label so people know what it is."
+                : `Google Drive links for ${selectedProject?.name || "this project"}.`}
+            </div>
+            <LinksList links={links} canManage={canManage} onAdd={addLink} onRemove={removeLink} />
+          </div>
+
+          {/* Files uploaded before uploads were switched off. Shown only if
+              there are any, so they stay reachable without inviting more. */}
+          {items.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                <FileText size={14} color="var(--accent)" />
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{FILE_UPLOADS_ENABLED ? "Uploaded files" : "Uploaded earlier"}</span>
+                <span className="tfh-chip" style={{ fontSize: 10, background: "var(--raised)", color: "var(--text-dim)" }}>{items.length}</span>
+                {!FILE_UPLOADS_ENABLED && <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>From before files moved to Google Drive links</span>}
+              </div>
+              {items.map((doc) => (
+                <DocumentRow key={doc.id} doc={doc} workspaceId={workspaceId} projectId={selectedId} canManage={canManage} onRemove={() => remove(doc.id)} />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {/* Files that arrived through an activity. Read-only here: they belong
@@ -5347,7 +5445,7 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
             <Paperclip size={14} color="var(--accent)" />
             <span style={{ fontSize: 13, fontWeight: 700 }}>From activities</span>
             <span className="tfh-chip" style={{ fontSize: 10, background: "var(--raised)", color: "var(--text-dim)" }}>{taskFiles.length + taskLinks.length}</span>
-            <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Uploaded against a collab in this project</span>
+            <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Added to a collab in this project</span>
           </div>
           {taskFiles.map((f) => (
             <DocumentRow
@@ -5371,22 +5469,6 @@ const DocumentsView = ({ workspaceId, projectId, projects, projectName, isWorksp
         </div>
       )}
 
-      {/* Pasted links — Google Drive, Sheets, anything on the web. Uses the
-          same LinksList control (and the same project-links API) already
-          used on milestones, rather than inventing a second one. */}
-      {!loading && (
-        <div className="tfh-card" style={{ padding: 18 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <Link2 size={14} color="var(--accent)" />
-            <span style={{ fontSize: 13, fontWeight: 700 }}>Links</span>
-            {links.length > 0 && <span className="tfh-chip" style={{ fontSize: 10, background: "var(--raised)", color: "var(--text-dim)" }}>{links.length}</span>}
-          </div>
-          <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 10 }}>
-            Paste a Google Drive file or folder link, a Sheet, or any other URL — no upload needed.
-          </div>
-          <LinksList links={links} canManage={canManage} onAdd={addLink} onRemove={removeLink} />
-        </div>
-      )}
     </div>
   );
 };
@@ -5489,7 +5571,7 @@ const MilestoneAttachmentsMini = ({ workspaceId, projectId, milestoneId, attachm
           ))}
         </div>
       )}
-      {canManage && (
+      {canManage && FILE_UPLOADS_ENABLED && (
         <>
           <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => handleFiles(e.target.files)} />
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "4px 8px" }}>
@@ -5501,167 +5583,25 @@ const MilestoneAttachmentsMini = ({ workspaceId, projectId, milestoneId, attachm
   );
 };
 
-const MilestoneCard = ({ milestone, index, total, canManage, onEdit, onDelete, onMove, onAddLink, onRemoveLink, workspaceId, projectId, onAddAttachment, onRemoveAttachment }) => {
-  const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(milestone.title);
-  const [description, setDescription] = useState(milestone.description);
-  const [targetDate, setTargetDate] = useState(milestone.targetDate || "");
-  const [saving, setSaving] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
-  const save = async (e) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-    setSaving(true);
-    try {
-      await onEdit(milestone.id, { title: title.trim(), description, targetDate: targetDate || null });
-      setEditing(false);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (editing) {
-    return (
-      <form onSubmit={save} className="tfh-card" style={{ padding: 18 }}>
-        <input autoFocus className="tfh-input" placeholder="Milestone title" value={title} onChange={(e) => setTitle(e.target.value)} style={{ marginBottom: 10 }} />
-        <textarea className="tfh-input" rows={2} placeholder="Description" value={description} onChange={(e) => setDescription(e.target.value)} style={{ marginBottom: 10, resize: "vertical" }} />
-        <DateField value={targetDate} onChange={setTargetDate} style={{ marginBottom: 12 }} ariaLabel="Target date" />
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button type="button" className="tfh-btn" onClick={() => setEditing(false)}>Cancel</button>
-          <button className="tfh-btn tfh-btn-accent" disabled={saving || !title.trim()}>{saving ? "Saving…" : "Save"}</button>
-        </div>
-      </form>
-    );
-  }
-
-  return (
-    <div className="tfh-card" style={{ padding: 18 }}>
-      <div style={{ display: "flex", gap: 12 }}>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, paddingTop: 2 }}>
-          <div style={{ width: 26, height: 26, borderRadius: 999, background: "var(--accent-soft)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{index + 1}</div>
-          {canManage && (
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              <button type="button" disabled={index === 0} onClick={() => onMove(milestone.id, "up")} className="tfh-btn tfh-btn-ghost" style={{ padding: 2, opacity: index === 0 ? 0.3 : 1 }} aria-label="Move up"><ChevronUp size={13} /></button>
-              <button type="button" disabled={index === total - 1} onClick={() => onMove(milestone.id, "down")} className="tfh-btn tfh-btn-ghost" style={{ padding: 2, opacity: index === total - 1 ? 0.3 : 1 }} aria-label="Move down"><ChevronDown size={13} /></button>
-            </div>
-          )}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-            <span style={{ fontSize: 15, fontWeight: 600 }}>{milestone.title}</span>
-            {canManage && (
-              <div style={{ display: "flex", gap: 4 }}>
-                <button className="tfh-btn tfh-btn-ghost" style={{ padding: 5 }} onClick={() => setEditing(true)} aria-label="Edit"><Pencil size={12} /></button>
-                {confirmDelete ? (
-                  <button className="tfh-btn tfh-btn-ghost" style={{ padding: 5, color: "var(--pri-high)" }} onClick={() => onDelete(milestone.id)} aria-label="Confirm delete"><Check size={12} /></button>
-                ) : (
-                  <button className="tfh-btn tfh-btn-ghost" style={{ padding: 5 }} onClick={() => setConfirmDelete(true)} aria-label="Delete"><Trash2 size={12} /></button>
-                )}
-              </div>
-            )}
-          </div>
-          {milestone.description && <div style={{ fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.5, marginBottom: 8 }}>{milestone.description}</div>}
-          {milestone.targetDate && (
-            <div className="tfh-chip" style={{ background: "var(--accent-soft)", color: "var(--accent)", marginBottom: 10 }}>
-              <CalendarDays size={11} /> Target: {new Date(milestone.targetDate + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-            </div>
-          )}
-          <LinksList
-            links={milestone.links || []} canManage={canManage} compact
-            onAdd={(label, url) => onAddLink(milestone.id, label, url)}
-            onRemove={(linkId) => onRemoveLink(milestone.id, linkId)}
-          />
-          <MilestoneAttachmentsMini
-            workspaceId={workspaceId} projectId={projectId} milestoneId={milestone.id}
-            attachments={milestone.attachments || []} canManage={canManage}
-            onAdd={(attachment) => onAddAttachment(milestone.id, attachment)}
-            onRemove={(attachmentId) => onRemoveAttachment(milestone.id, attachmentId)}
-          />
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const ProjectLeadCard = ({ workspaceId, projectId, project, isAdmin, users, onProjectUpdated }) => {
-  const [editing, setEditing] = useState(false);
-  const [selected, setSelected] = useState(project?.leadId || "");
+/**
+ * Project details — name, description, start date, deadline. Opened from the
+ * pencil on a project in the sidebar. These used to sit at the top of the
+ * Milestones page as "Project timeline", which made that page about two
+ * different things at once.
+ */
+const ProjectDetailsModal = ({ workspaceId, project, onClose, onSaved }) => {
+  const [name, setName] = useState(project.name || "");
+  const [description, setDescription] = useState(project.description || "");
+  const [deadline, setDeadline] = useState(project.deadline || "");
+  const [startDate, setStartDate] = useState(project.hasExplicitStartDate ? project.startDate : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const save = async () => {
-    setSaving(true);
-    setError("");
-    try {
-      const { project: updated } = await api.setProjectLead(workspaceId, projectId, selected || null);
-      onProjectUpdated(updated);
-      setEditing(false);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="tfh-card" style={{ padding: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: editing ? 12 : 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <BadgeCheck size={16} color="var(--accent)" />
-          <div>
-            <div className="tfh-label" style={{ marginBottom: 2 }}>Project Lead</div>
-            {project?.leadId ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <Avatar member={{ name: project.leadName, color: project.leadColor, initials: project.leadInitials }} size={20} />
-                <span style={{ fontSize: 13.5, fontWeight: 600 }}>{project.leadName}</span>
-              </div>
-            ) : (
-              <span style={{ fontSize: 13, color: "var(--text-faint)" }}>Not assigned — this project follows the workspace admin/lead by default.</span>
-            )}
-          </div>
-        </div>
-        {isAdmin && !editing && (
-          <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11.5 }} onClick={() => { setSelected(project?.leadId || ""); setEditing(true); }}>
-            <Pencil size={11} /> Change
-          </button>
-        )}
-      </div>
-      {editing && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <select className="tfh-input" value={selected} onChange={(e) => setSelected(e.target.value)} style={{ fontSize: 12.5 }}>
-            <option value="">No project lead</option>
-            {users.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
-          <button className="tfh-btn" onClick={() => setEditing(false)}>Cancel</button>
-          <button className="tfh-btn tfh-btn-accent" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
-        </div>
-      )}
-      {error && <div style={{ fontSize: 11.5, color: "var(--pri-high)", marginTop: 8 }}>{error}</div>}
-      <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10, lineHeight: 1.4 }}>
-        A project's own lead can manage this project's tasks, milestones, and files, the same as the workspace admin/lead — scoped to just this project.
-      </div>
-    </div>
-  );
-};
-
-const ProjectInfoCard = ({ workspaceId, projectId, project, canManage, onProjectUpdated }) => {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(project?.name || "");
-  const [description, setDescription] = useState(project?.description || "");
-  const [deadline, setDeadline] = useState(project?.deadline || "");
-  const [startDate, setStartDate] = useState(project?.hasExplicitStartDate ? project.startDate : "");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  const startEdit = () => {
-    setName(project?.name || "");
-    setDescription(project?.description || "");
-    setDeadline(project?.deadline || "");
-    setStartDate(project?.hasExplicitStartDate ? project.startDate : "");
-    setError("");
-    setEditing(true);
-  };
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !saving) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, saving]);
 
   const save = async (e) => {
     e.preventDefault();
@@ -5669,21 +5609,26 @@ const ProjectInfoCard = ({ workspaceId, projectId, project, canManage, onProject
     setSaving(true);
     setError("");
     try {
-      const { project: updated } = await api.updateProject(workspaceId, projectId, { name: name.trim(), description, deadline: deadline || null, startDate: startDate || null });
-      onProjectUpdated(updated);
-      setEditing(false);
+      await api.updateProject(workspaceId, project.id, { name: name.trim(), description, deadline: deadline || null, startDate: startDate || null });
+      await onSaved();
+      onClose();
     } catch (err) {
       setError(err.message);
-    } finally {
       setSaving(false);
     }
   };
 
-  if (editing) {
-    return (
-      <form onSubmit={save} className="tfh-card" style={{ padding: 20 }}>
+  const created = project.createdAt ? milestoneDate(localDateStr(new Date(project.createdAt))) : "";
+
+  return (
+    <div className="tfh-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !saving) onClose(); }}>
+      <form onSubmit={save} className="tfh-card tfh-modal-card" style={{ width: "100%", maxWidth: 520, padding: 22 }} role="dialog" aria-label={`Project details — ${project.name}`}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <span className="tfh-display" style={{ fontSize: 19, fontWeight: 600 }}>Project details</span>
+          <button type="button" className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={onClose} aria-label="Close"><X size={16} /></button>
+        </div>
         <label className="tfh-label" htmlFor="proj-edit-name">Project name</label>
-        <input id="proj-edit-name" className="tfh-input" value={name} onChange={(e) => setName(e.target.value)} style={{ marginBottom: 12 }} />
+        <input id="proj-edit-name" autoFocus className="tfh-input" value={name} onChange={(e) => setName(e.target.value)} style={{ marginBottom: 12 }} />
         <label className="tfh-label" htmlFor="proj-edit-desc">Description</label>
         <textarea id="proj-edit-desc" className="tfh-input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} style={{ marginBottom: 12, resize: "vertical" }} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 6 }}>
@@ -5697,275 +5642,447 @@ const ProjectInfoCard = ({ workspaceId, projectId, project, canManage, onProject
           </div>
         </div>
         <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 14 }}>
-          Leave start date blank to use when the project was created ({new Date(project.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}).
+          Leave the start date blank to use the day the project was created{created ? ` (${created})` : ""}.
+          {" "}The project's lead is set under Team.
         </div>
-        {error && <div style={{ fontSize: 12, color: "var(--pri-high)", marginBottom: 12 }}>{error}</div>}
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button type="button" className="tfh-btn" onClick={() => setEditing(false)}>Cancel</button>
+        {error && <div role="alert" style={{ fontSize: 12, color: "var(--pri-high)", marginBottom: 12 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+          <button type="button" className="tfh-btn" onClick={onClose} disabled={saving}>Cancel</button>
           <button className="tfh-btn tfh-btn-accent" disabled={saving || !name.trim()}>{saving ? "Saving…" : "Save"}</button>
         </div>
       </form>
-    );
-  }
-
-  return (
-    <div className="tfh-card" style={{ padding: 20 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>Project timeline</span>
-        {canManage && <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11.5 }} onClick={startEdit}><Pencil size={11} /> Edit</button>}
-      </div>
-      <div style={{ fontSize: 13, color: "var(--text)", marginTop: 6 }}>
-        {project?.startDate && new Date(project.startDate + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-        {!project?.hasExplicitStartDate && <span style={{ color: "var(--text-faint)" }}> (from creation date)</span>}
-        {" – "}
-        {project?.deadline ? new Date(project.deadline + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : <span style={{ color: "var(--text-faint)" }}>no deadline set</span>}
-      </div>
-      {project?.description && <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 10, lineHeight: 1.5 }}>{project.description}</div>}
     </div>
   );
 };
 
-const MilestonesView = ({ workspaceId, projectId, project, canManage, isAdmin, users, onProjectUpdated }) => {
-  const [milestones, setMilestones] = useState([]);
-  const [projectLinks, setProjectLinks] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [newDesc, setNewDesc] = useState("");
-  const [newDate, setNewDate] = useState("");
-  const [newLinks, setNewLinks] = useState([]);
-  const [newLinkLabel, setNewLinkLabel] = useState("");
-  const [newLinkUrl, setNewLinkUrl] = useState("");
-  const [newFiles, setNewFiles] = useState([]);
-  const newFileInputRef = useRef(null);
-  const [creating, setCreating] = useState(false);
-  const [completing, setCompleting] = useState(false);
-  const [confirmComplete, setConfirmComplete] = useState(false);
+// "Wed 30 Sept 2026". Milestones span years, so unlike the agenda headings
+// this one carries the year. Day-first, built by hand (see dayAndDate).
+const milestoneDate = (dateStr) => {
+  const p = dateParts(dateStr);
+  return p ? `${WEEKDAY_NAMES[p.weekday]} ${p.d} ${MONTH_NAMES[p.m - 1]} ${p.y}` : "";
+};
+
+// "Today", "in 5 days", "12 days ago" — how far a milestone is from today,
+// counted on calendar dates at UTC noon so no timezone can shift it a day.
+const daysFromToday = (dateStr) => {
+  const p = dateParts(dateStr);
+  if (!p) return null;
+  const t = dateParts(localDateStr());
+  return Math.round((Date.UTC(p.y, p.m - 1, p.d, 12) - Date.UTC(t.y, t.m - 1, t.d, 12)) / 86400000);
+};
+const relativeDay = (n) => {
+  if (n == null) return "";
+  if (n === 0) return "Today";
+  if (n === 1) return "Tomorrow";
+  if (n === -1) return "Yesterday";
+  return n > 0 ? `in ${n} days` : `${-n} days ago`;
+};
+
+const EMPTY_MILESTONE_FORM = { targetDate: "", title: "", projectId: "", description: "", linkLabel: "", linkUrl: "" };
+
+/**
+ * The milestone form, laid out the way the Chief drew it:
+ *
+ *   Date of Milestone   Milestone Title    Project Name (select)
+ *   Details of Milestone   Link to File     https://…
+ *
+ * Used both to add a milestone and to edit one in place. `existingLinks` is
+ * only passed when editing: older milestones can carry several links, and
+ * they're listed (removable) above the one-link input rather than squeezed
+ * into it.
+ */
+const MilestoneForm = ({ initial, projects, submitLabel, busyLabel, onSubmit, onCancel, existingLinks, onRemoveExistingLink, autoFocusTitle }) => {
+  const [form, setForm] = useState(() => ({ ...EMPTY_MILESTONE_FORM, ...initial }));
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const set = (key) => (value) => setForm((f) => ({ ...f, [key]: value }));
 
-  const load = async () => {
-    setLoading(true);
-    try {
-      const [msRes, linksRes] = await Promise.all([api.getMilestones(workspaceId, projectId), api.getProjectLinks(workspaceId, projectId)]);
-      setMilestones(msRes.milestones);
-      setProjectLinks(linksRes.links);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // When the sidebar project changes, a blank add-form follows it — but never
+  // overwrite a project someone has already picked here.
+  useEffect(() => {
+    if (initial?.projectId && !form.projectId) setForm((f) => ({ ...f, projectId: initial.projectId }));
+  }, [initial?.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { load(); setAdding(false); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const missing = [
+    !form.targetDate && "the date",
+    !form.title.trim() && "a title",
+    !form.projectId && "the project",
+  ].filter(Boolean);
+  const linkHalfFilled = Boolean(form.linkLabel.trim()) && !form.linkUrl.trim();
 
-  const createNew = async (e) => {
+  const submit = async (e) => {
     e.preventDefault();
-    if (!newTitle.trim()) return;
-    setCreating(true);
+    if (missing.length) { setError(`Please add ${missing.join(", ").replace(/, ([^,]*)$/, " and $1")}.`); return; }
+    if (linkHalfFilled) { setError("Paste the link (https://…) for the file, or clear its name."); return; }
+    setBusy(true);
     setError("");
     try {
-      const { milestone } = await api.createMilestone(workspaceId, projectId, { title: newTitle.trim(), description: newDesc, targetDate: newDate || null });
-
-      // Upload whatever links/files were staged before the milestone existed
-      // — same pattern as subtask creation: stage locally, upload once a
-      // real id exists.
-      const uploadJobs = [
-        ...newLinks.map((l) => api.addMilestoneLink(workspaceId, projectId, milestone.id, l.label, l.url)),
-        ...newFiles.map((f) => api.uploadMilestoneAttachment(workspaceId, projectId, milestone.id, f)),
-      ];
-      if (uploadJobs.length > 0) await Promise.all(uploadJobs);
-
-      // Refetch so the new milestone's card shows its freshly-uploaded links/files immediately.
-      const { milestones: refreshed } = await api.getMilestones(workspaceId, projectId);
-      setMilestones(refreshed);
-      setNewTitle(""); setNewDesc(""); setNewDate(""); setNewLinks([]); setNewFiles([]); setAdding(false);
+      await onSubmit({
+        targetDate: form.targetDate,
+        title: form.title.trim(),
+        projectId: form.projectId,
+        description: form.description.trim(),
+        link: form.linkUrl.trim() ? { label: form.linkLabel.trim(), url: normalizeUrl(form.linkUrl) } : null,
+      });
+      if (!onCancel) setForm((f) => ({ ...EMPTY_MILESTONE_FORM, projectId: f.projectId })); // add-form: ready for the next one, same project
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Couldn't save the milestone.");
     } finally {
-      setCreating(false);
+      setBusy(false);
     }
   };
 
-  const addNewLink = (e) => {
-    e.preventDefault();
-    if (!newLinkUrl.trim()) return;
-    setNewLinks((prev) => [...prev, { label: newLinkLabel.trim() || newLinkUrl.trim(), url: normalizeUrl(newLinkUrl) }]);
-    setNewLinkLabel(""); setNewLinkUrl("");
-  };
-  const removeNewLink = (i) => setNewLinks((prev) => prev.filter((_, idx) => idx !== i));
-  const handleNewFiles = (fileList) => setNewFiles((prev) => [...prev, ...Array.from(fileList || [])]);
-  const removeNewFile = (i) => setNewFiles((prev) => prev.filter((_, idx) => idx !== i));
+  const active = projects.filter((p) => !p.completedAt || p.id === form.projectId);
 
-  const editMilestone = async (id, patch) => {
-    const { milestone } = await api.updateMilestone(workspaceId, projectId, id, patch);
-    setMilestones((prev) => prev.map((m) => (m.id === id ? { ...milestone, links: m.links } : m)));
-  };
-  const deleteMilestoneHandler = async (id) => {
-    await api.deleteMilestone(workspaceId, projectId, id);
-    setMilestones((prev) => prev.filter((m) => m.id !== id));
-  };
-  const moveMilestoneHandler = async (id, direction) => {
-    const { milestones: reordered } = await api.moveMilestone(workspaceId, projectId, id, direction);
-    setMilestones((prev) => reordered.map((m) => ({ ...m, links: prev.find((p) => p.id === m.id)?.links || [] })));
-  };
-  const addLinkToMilestone = async (milestoneId, label, url) => {
-    const { link } = await api.addMilestoneLink(workspaceId, projectId, milestoneId, label, url);
-    setMilestones((prev) => prev.map((m) => (m.id === milestoneId ? { ...m, links: [...(m.links || []), link] } : m)));
-  };
-  const removeLinkFromMilestone = async (milestoneId, linkId) => {
-    await api.deleteMilestoneLink(workspaceId, projectId, milestoneId, linkId);
-    setMilestones((prev) => prev.map((m) => (m.id === milestoneId ? { ...m, links: m.links.filter((l) => l.id !== linkId) } : m)));
-  };
+  return (
+    <form onSubmit={submit} className="tfh-milestone-form" noValidate>
+      <div className="tfh-milestone-grid">
+        <div>
+          <label className="tfh-label" htmlFor="ms-date">Date of milestone</label>
+          <DateField id="ms-date" value={form.targetDate} onChange={set("targetDate")} ariaLabel="Date of milestone" />
+        </div>
+        <div>
+          <label className="tfh-label" htmlFor="ms-title">Milestone title</label>
+          <input
+            id="ms-title" className="tfh-input" placeholder="e.g. Cabinet approval received"
+            value={form.title} onChange={(e) => set("title")(e.target.value)} autoFocus={autoFocusTitle}
+          />
+        </div>
+        <div>
+          <label className="tfh-label" htmlFor="ms-project">Project name</label>
+          <select id="ms-project" className="tfh-input" value={form.projectId} onChange={(e) => set("projectId")(e.target.value)}>
+            <option value="" disabled>Select a project…</option>
+            {active.map((p) => <option key={p.id} value={p.id}>{p.name}{p.completedAt ? " (completed)" : ""}</option>)}
+          </select>
+        </div>
+        <div className="tfh-milestone-details">
+          <label className="tfh-label" htmlFor="ms-details">Details of milestone</label>
+          <textarea
+            id="ms-details" className="tfh-input" rows={2} placeholder="What was achieved, decided or delivered"
+            value={form.description} onChange={(e) => set("description")(e.target.value)} style={{ resize: "vertical" }}
+          />
+        </div>
+        <div>
+          <label className="tfh-label" htmlFor="ms-link-label">Link to file</label>
+          <input
+            id="ms-link-label" className="tfh-input" placeholder="File name (optional)"
+            value={form.linkLabel} onChange={(e) => set("linkLabel")(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="tfh-label" htmlFor="ms-link-url">Google Drive link</label>
+          <input
+            id="ms-link-url" className="tfh-input" placeholder="https://…" inputMode="url"
+            value={form.linkUrl} onChange={(e) => set("linkUrl")(e.target.value)}
+          />
+        </div>
+      </div>
 
-  // The upload itself already happened by the time these fire (see
-  // MilestoneAttachmentsMini) — this just keeps local state in sync.
-  const addAttachmentToMilestone = (milestoneId, attachment) => {
-    setMilestones((prev) => prev.map((m) => (m.id === milestoneId ? { ...m, attachments: [...(m.attachments || []), attachment] } : m)));
-  };
-  const removeAttachmentFromMilestone = (milestoneId, attachmentId) => {
-    setMilestones((prev) => prev.map((m) => (m.id === milestoneId ? { ...m, attachments: (m.attachments || []).filter((a) => a.id !== attachmentId) } : m)));
-  };
+      {existingLinks?.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
+          {existingLinks.map((l) => (
+            <span key={l.id} className="tfh-chip" style={{ background: "var(--raised)", color: "var(--accent)", gap: 6, maxWidth: 280 }}>
+              <Link2 size={11} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.label}</span>
+              <button
+                type="button" onClick={() => onRemoveExistingLink(l.id)} className="tfh-btn tfh-btn-ghost"
+                style={{ padding: 1 }} aria-label={`Remove link ${l.label}`} title="Remove this link"
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
-  const addProjectLink = async (label, url) => {
-    const { link } = await api.addProjectLink(workspaceId, projectId, label, url);
-    setProjectLinks((prev) => [...prev, link]);
-  };
-  const removeProjectLink = async (linkId) => {
-    await api.deleteProjectLink(workspaceId, projectId, linkId);
-    setProjectLinks((prev) => prev.filter((l) => l.id !== linkId));
-  };
+      {error && <div role="alert" style={{ fontSize: 12, color: "var(--pri-high)", marginTop: 12 }}>{error}</div>}
 
-  const toggleComplete = async (complete) => {
-    setCompleting(true);
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+        {onCancel
+          ? <button type="button" className="tfh-btn" onClick={onCancel} disabled={busy}>Cancel</button>
+          : (form.title || form.description || form.linkUrl || form.linkLabel || form.targetDate) && (
+            <button type="button" className="tfh-btn tfh-btn-ghost" onClick={() => { setForm((f) => ({ ...EMPTY_MILESTONE_FORM, projectId: f.projectId })); setError(""); }} disabled={busy}>Clear</button>
+          )}
+        <button className="tfh-btn tfh-btn-accent" disabled={busy}>
+          {onCancel ? <Check size={14} /> : <Plus size={14} />} {busy ? busyLabel : submitLabel}
+        </button>
+      </div>
+    </form>
+  );
+};
+
+const MilestoneRow = ({ milestone, projects, canManage, workspaceId, onSave, onDelete, onRemoveLink, onAttachmentsChange }) => {
+  const [editing, setEditing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+  const n = daysFromToday(milestone.targetDate);
+  const isPast = n != null && n < 0;
+
+  if (editing) {
+    return (
+      <div className="tfh-card" style={{ padding: 16, borderColor: "var(--accent)" }}>
+        <MilestoneForm
+          initial={{
+            targetDate: milestone.targetDate || "", title: milestone.title, projectId: milestone.projectId,
+            description: milestone.description || "",
+          }}
+          projects={projects}
+          existingLinks={milestone.links}
+          onRemoveExistingLink={(linkId) => onRemoveLink(milestone, linkId)}
+          submitLabel="Save" busyLabel="Saving…" autoFocusTitle
+          onCancel={() => setEditing(false)}
+          onSubmit={async (values) => { await onSave(milestone, values); setEditing(false); }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className={`tfh-milestone-row ${isPast ? "past" : ""}`}>
+      <div className="tfh-milestone-when">
+        <div className="tfh-mono" style={{ fontSize: 12, fontWeight: 600, color: isPast ? "var(--text-dim)" : "var(--accent)" }}>
+          {milestone.targetDate ? milestoneDate(milestone.targetDate) : "No date"}
+        </div>
+        {n != null && <div style={{ fontSize: 11, color: n === 0 ? "var(--accent)" : "var(--text-faint)", marginTop: 2 }}>{relativeDay(n)}</div>}
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>{milestone.title}</span>
+          <span className="tfh-chip" style={{ background: "var(--raised)", color: "var(--text-dim)", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={milestone.projectName}>
+            <FolderKanban size={10} /> {milestone.projectName}
+          </span>
+        </div>
+        {milestone.description && (
+          <div style={{ fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-wrap" }}>{milestone.description}</div>
+        )}
+        {(milestone.links || []).length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+            {milestone.links.map((l) => (
+              <a
+                key={l.id} href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer"
+                className="tfh-chip tfh-milestone-link" title={l.url}
+              >
+                <Link2 size={11} /> <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.label}</span>
+              </a>
+            ))}
+          </div>
+        )}
+        {(milestone.attachments || []).length > 0 && (
+          <MilestoneAttachmentsMini
+            workspaceId={workspaceId} projectId={milestone.projectId} milestoneId={milestone.id}
+            attachments={milestone.attachments} canManage={canManage}
+            onAdd={(a) => onAttachmentsChange(milestone, [...milestone.attachments, a])}
+            onRemove={(id) => onAttachmentsChange(milestone, milestone.attachments.filter((a) => a.id !== id))}
+          />
+        )}
+        {error && <div style={{ fontSize: 11.5, color: "var(--pri-high)", marginTop: 6 }}>{error}</div>}
+      </div>
+
+      {canManage && (
+        <div style={{ display: "flex", gap: 2, flexShrink: 0, alignItems: "flex-start" }}>
+          {confirmDelete ? (
+            <>
+              <button
+                className="tfh-btn tfh-btn-danger" style={{ fontSize: 11, padding: "4px 9px" }} disabled={deleting}
+                onClick={async () => {
+                  setDeleting(true); setError("");
+                  try { await onDelete(milestone); } catch (err) { setError(err.message); setDeleting(false); setConfirmDelete(false); }
+                }}
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+              <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "4px 8px" }} onClick={() => setConfirmDelete(false)} disabled={deleting}>Keep</button>
+            </>
+          ) : (
+            <>
+              <button className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={() => setEditing(true)} aria-label={`Edit ${milestone.title}`} title="Edit"><Pencil size={13} /></button>
+              <button className="tfh-btn tfh-btn-ghost" style={{ padding: 6 }} onClick={() => setConfirmDelete(true)} aria-label={`Delete ${milestone.title}`} title="Delete"><Trash2 size={13} /></button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
+ * Milestones — one page for the whole workspace: a form at the top (Date,
+ * Title, Project; Details, Link to file, URL) and every milestone below it,
+ * across all projects, upcoming first.
+ *
+ * It replaces the old per-project page, which stacked the project's
+ * timeline, its lead, its reference links and a "mark complete" panel above
+ * the milestones themselves — "a little confusing". Those moved to where
+ * they belong: project details (name, dates, description) open from the
+ * pencil on the project in the sidebar; the project lead is set in Team;
+ * reference links live under Files; completing a project is a drag into
+ * the Completed Projects folder.
+ */
+const MilestonesView = ({ workspaceId, projects, currentProjectId, isWorkspaceManager, currentUserId }) => {
+  const [milestones, setMilestones] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [filter, setFilter] = useState("all");
+
+  // Same rule the server applies (requireProjectManager): workspace admin or
+  // lead, or that project's own lead.
+  const canManageProject = useCallback(
+    (projectId) => isWorkspaceManager || projects.find((p) => p.id === projectId)?.leadId === currentUserId,
+    [isWorkspaceManager, projects, currentUserId]
+  );
+  const formProjects = projects.filter((p) => canManageProject(p.id));
+  const canAddAny = formProjects.some((p) => !p.completedAt);
+  const defaultProject = currentProjectId && formProjects.some((p) => p.id === currentProjectId && !p.completedAt) ? currentProjectId : "";
+
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
     try {
-      const { project: updated } = await api.setProjectComplete(workspaceId, projectId, complete);
-      onProjectUpdated(updated);
-      setConfirmComplete(false);
+      const { milestones: rows } = await api.getWorkspaceMilestones(workspaceId);
+      setMilestones(rows);
+      setLoadError("");
     } catch (err) {
-      setError(err.message);
+      setLoadError(err.message || "Couldn't load milestones.");
     } finally {
-      setCompleting(false);
+      if (!quiet) setLoading(false);
     }
+  }, [workspaceId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Milestones are shared: someone else adding one should show up here
+  // without a reload. Every milestone change already broadcasts this.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return undefined;
+    const onChanged = () => load(true);
+    socket.on("projects:changed", onChanged);
+    return () => socket.off("projects:changed", onChanged);
+  }, [load]);
+
+  const projectName = (id) => projects.find((p) => p.id === id)?.name || "";
+
+  const create = async ({ projectId, title, description, targetDate, link }) => {
+    const { milestone } = await api.createMilestone(workspaceId, projectId, { title, description, targetDate, link });
+    setMilestones((prev) => [...prev, { ...milestone, projectName: projectName(projectId), links: milestone.links || [], attachments: [] }]);
+    load(true);
   };
 
-  const isComplete = !!project?.completedAt;
+  const save = async (m, { projectId, title, description, targetDate, link }) => {
+    const { milestone } = await api.updateMilestone(workspaceId, m.projectId, m.id, { title, description, targetDate, projectId });
+    let links = m.links || [];
+    if (link) {
+      // Created under the milestone's NEW project — it may just have moved.
+      const { link: added } = await api.addMilestoneLink(workspaceId, projectId, m.id, link.label || link.url, link.url);
+      links = [...links, added];
+    }
+    setMilestones((prev) => prev.map((x) => (x.id === m.id ? { ...x, ...milestone, projectId, projectName: projectName(projectId), links } : x)));
+  };
+
+  const remove = async (m) => {
+    await api.deleteMilestone(workspaceId, m.projectId, m.id);
+    setMilestones((prev) => prev.filter((x) => x.id !== m.id));
+  };
+
+  const removeLink = async (m, linkId) => {
+    await api.deleteMilestoneLink(workspaceId, m.projectId, m.id, linkId);
+    setMilestones((prev) => prev.map((x) => (x.id === m.id ? { ...x, links: x.links.filter((l) => l.id !== linkId) } : x)));
+  };
+
+  const setAttachments = (m, attachments) => {
+    setMilestones((prev) => prev.map((x) => (x.id === m.id ? { ...x, attachments } : x)));
+  };
+
+  // Upcoming first, soonest at the top — that's what you plan against. Then
+  // what's already happened, most recent first, then anything undated.
+  const today = localDateStr();
+  const shown = milestones.filter((m) => filter === "all" || m.projectId === filter);
+  const upcoming = shown.filter((m) => m.targetDate && m.targetDate >= today).sort((a, b) => a.targetDate.localeCompare(b.targetDate));
+  const past = shown.filter((m) => m.targetDate && m.targetDate < today).sort((a, b) => b.targetDate.localeCompare(a.targetDate));
+  const undated = shown.filter((m) => !m.targetDate);
+  const projectsWithMilestones = projects.filter((p) => milestones.some((m) => m.projectId === p.id));
+
+  const group = (title, rows, hint) => rows.length > 0 && (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "0 2px" }}>
+        <span style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-faint)" }}>{title}</span>
+        <span className="tfh-mono" style={{ fontSize: 11, color: "var(--text-faint)" }}>{rows.length}</span>
+        {hint && <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>{hint}</span>}
+      </div>
+      <div className="tfh-card" style={{ padding: 0, overflow: "hidden" }}>
+        {rows.map((m) => (
+          <MilestoneRow
+            key={m.id} milestone={m} projects={formProjects.length ? formProjects : projects}
+            canManage={canManageProject(m.projectId)} workspaceId={workspaceId}
+            onSave={save} onDelete={remove} onRemoveLink={removeLink} onAttachmentsChange={setAttachments}
+          />
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
         <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>Milestones</div>
-        <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>The roadmap for this project, in order — set and updated by the admin or team lead.</div>
+        <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>Key dates for every project, in one list.</div>
       </div>
 
-      {isComplete && (
-        <div className="tfh-card" style={{ padding: 18, borderColor: "var(--stage-done)", display: "flex", alignItems: "center", gap: 12 }}>
-          <Check size={18} color="var(--stage-done)" />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>Project complete</div>
-            <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Marked done on {new Date(project.completedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}. Its tasks and files stay available in Project History.</div>
+      {canAddAny ? (
+        <div className="tfh-card" style={{ padding: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+            <Flag size={15} color="var(--accent)" />
+            <span style={{ fontSize: 14, fontWeight: 700 }}>Add a milestone</span>
           </div>
-          {canManage && <button className="tfh-btn" onClick={() => toggleComplete(false)} disabled={completing}>{completing ? "…" : "Reopen"}</button>}
+          <MilestoneForm
+            initial={{ projectId: defaultProject }}
+            projects={formProjects}
+            submitLabel="Add milestone" busyLabel="Adding…"
+            onSubmit={create}
+          />
+        </div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-dim)", background: "var(--raised)", padding: "9px 12px", borderRadius: 10 }}>
+          <Lock size={13} /> View only — your admin, team lead, or a project's own lead adds milestones.
         </div>
       )}
 
-      <ProjectInfoCard workspaceId={workspaceId} projectId={projectId} project={project} canManage={canManage} onProjectUpdated={onProjectUpdated} />
-
-      <ProjectLeadCard workspaceId={workspaceId} projectId={projectId} project={project} isAdmin={isAdmin} users={users} onProjectUpdated={onProjectUpdated} />
-
-      <div className="tfh-card" style={{ padding: 20 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, display: "block", marginBottom: 10 }}>Project reference links</span>
-        <LinksList links={projectLinks} canManage={canManage} onAdd={addProjectLink} onRemove={removeProjectLink} />
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 14, fontWeight: 700 }}>All milestones</span>
+        {projectsWithMilestones.length > 1 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginLeft: "auto" }}>
+            <FolderKanban size={13} color="var(--text-faint)" />
+            <select
+              className="tfh-input" value={filter} onChange={(e) => setFilter(e.target.value)}
+              style={{ fontSize: 12.5, minWidth: 200, paddingTop: 6, paddingBottom: 6 }} aria-label="Show milestones for project"
+            >
+              <option value="all">All projects ({milestones.length})</option>
+              {projectsWithMilestones.map((p) => (
+                <option key={p.id} value={p.id}>{p.name} ({milestones.filter((m) => m.projectId === p.id).length})</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {loading ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 30, justifyContent: "center" }}><Spinner /> <span style={{ fontSize: 13, color: "var(--text-dim)" }}>Loading…</span></div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {milestones.map((m, i) => (
-            <MilestoneCard
-              key={m.id} milestone={m} index={i} total={milestones.length} canManage={canManage}
-              onEdit={editMilestone} onDelete={deleteMilestoneHandler} onMove={moveMilestoneHandler}
-              onAddLink={addLinkToMilestone} onRemoveLink={removeLinkFromMilestone}
-              workspaceId={workspaceId} projectId={projectId}
-              onAddAttachment={addAttachmentToMilestone} onRemoveAttachment={removeAttachmentFromMilestone}
-            />
-          ))}
-          {milestones.length === 0 && (
-            <div className="tfh-card" style={{ padding: 30, textAlign: "center" }}>
-              <Flag size={22} color="var(--text-faint)" style={{ marginBottom: 8 }} />
-              <div style={{ fontSize: 13, color: "var(--text-dim)" }}>No milestones yet for this project.</div>
-            </div>
-          )}
-          {canManage && (
-            adding ? (
-              <form onSubmit={createNew} className="tfh-card" style={{ padding: 18, borderColor: "var(--accent)" }}>
-                <input autoFocus className="tfh-input" placeholder="Milestone title" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} style={{ marginBottom: 10 }} />
-                <textarea className="tfh-input" rows={2} placeholder="Description (optional)" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} style={{ marginBottom: 10, resize: "vertical" }} />
-                <DateField value={newDate} onChange={setNewDate} style={{ marginBottom: 14 }} ariaLabel="Holiday date" />
-
-                <label className="tfh-label" style={{ fontSize: 10 }}>Links</label>
-                {newLinks.length > 0 && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 6 }}>
-                    {newLinks.map((l, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 7px", borderRadius: 6, background: "var(--raised)" }}>
-                        <Link2 size={11} color="var(--text-faint)" />
-                        <a className="tfh-link" href={normalizeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--accent)", textDecoration: "none" }} title={l.url}>{l.label}</a>
-                        <button type="button" onClick={() => removeNewLink(i)} className="tfh-btn tfh-btn-ghost" style={{ padding: 2 }} aria-label="Remove link"><X size={10} /></button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div style={{ display: "flex", gap: 5, marginBottom: 12 }}>
-                  <input value={newLinkLabel} onChange={(e) => setNewLinkLabel(e.target.value)} placeholder="Label" className="tfh-input" style={{ fontSize: 11, flex: "0 0 36%" }} />
-                  <input value={newLinkUrl} onChange={(e) => setNewLinkUrl(e.target.value)} placeholder="https://…" className="tfh-input" style={{ fontSize: 11 }} />
-                  <button type="button" onClick={addNewLink} className="tfh-btn tfh-btn-ghost" style={{ padding: "3px 7px", flexShrink: 0 }} aria-label="Add link"><Plus size={11} /></button>
-                </div>
-
-                <label className="tfh-label" style={{ fontSize: 10 }}>Files</label>
-                {newFiles.length > 0 && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 6 }}>
-                    {newFiles.map((f, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 7px", borderRadius: 6, background: "var(--raised)" }}>
-                        <Paperclip size={11} color="var(--text-faint)" />
-                        <span style={{ flex: 1, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
-                        <button type="button" onClick={() => removeNewFile(i)} className="tfh-btn tfh-btn-ghost" style={{ padding: 2 }} aria-label="Remove file"><X size={10} /></button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <input ref={newFileInputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => { handleNewFiles(e.target.files); e.target.value = ""; }} />
-                <button type="button" onClick={() => newFileInputRef.current?.click()} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 10.5, padding: "3px 7px", marginBottom: 14 }}>
-                  <Upload size={10} /> Add file
-                </button>
-
-                {error && <div style={{ fontSize: 12, color: "var(--pri-high)", marginBottom: 10 }}>{error}</div>}
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", borderTop: "1px solid var(--line)", paddingTop: 14 }}>
-                  <button type="button" className="tfh-btn" onClick={() => { setAdding(false); setNewLinks([]); setNewFiles([]); }}>Cancel</button>
-                  <button className="tfh-btn tfh-btn-accent" disabled={creating || !newTitle.trim()}>{creating ? "Adding…" : "Add milestone"}</button>
-                </div>
-              </form>
-            ) : (
-              <button className="tfh-btn tfh-btn-accent" onClick={() => setAdding(true)} style={{ alignSelf: "flex-start" }}><Plus size={14} /> Add milestone</button>
-            )
-          )}
-        </div>
-      )}
-
-      {canManage && !isComplete && (
-        <div className="tfh-card" style={{ padding: 20, borderColor: "var(--pri-high)" }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Mark this project complete</div>
-          <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.5 }}>
-            Moves this project to the workspace's history. Nothing is deleted — every task and file stays exactly where it is, just marked done.
+      ) : loadError ? (
+        <div style={{ fontSize: 12.5, color: "var(--pri-high)" }}>{loadError} <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 12 }} onClick={() => load()}>Try again</button></div>
+      ) : shown.length === 0 ? (
+        <div className="tfh-card" style={{ padding: 30, textAlign: "center" }}>
+          <Flag size={22} color="var(--text-faint)" style={{ marginBottom: 8 }} />
+          <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
+            No milestones yet{canAddAny ? " — add the first one with the form above." : "."}
           </div>
-          {confirmComplete ? (
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="tfh-btn" onClick={() => setConfirmComplete(false)}>Cancel</button>
-              <button className="tfh-btn" style={{ borderColor: "var(--pri-high)", color: "var(--pri-high)" }} onClick={() => toggleComplete(true)} disabled={completing}>
-                {completing ? "Completing…" : "Yes, mark complete"}
-              </button>
-            </div>
-          ) : (
-            <button className="tfh-btn" onClick={() => setConfirmComplete(true)}><Check size={14} /> Mark project complete</button>
-          )}
         </div>
+      ) : (
+        <>
+          {group("Upcoming", upcoming, "soonest first")}
+          {group("Past", past, "most recent first")}
+          {group("No date", undated)}
+        </>
       )}
     </div>
   );
@@ -6362,108 +6479,103 @@ const clampSidebarWidth = (w) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MI
 // Rename (inline, in place — no dialog for a one-field change) and Delete
 // behind a two-step confirm, since deleting a project takes its tasks,
 // milestones and files with it.
-const ProjectRow = ({ project, active, canManage, onSelect, onRename, onDelete, dragProps, dragging }) => {
-  const [mode, setMode] = useState(null); // null | "rename" | "confirm-delete"
-  const [name, setName] = useState(project.name);
+const ProjectRow = ({ project, active, canManage, canComplete, onSelect, onEdit, onDelete, onToggleComplete, dragProps, dragging, dropHint }) => {
+  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const inputRef = useRef(null);
-
-  useEffect(() => { setName(project.name); }, [project.name]);
-  useEffect(() => { if (mode === "rename") { inputRef.current?.focus(); inputRef.current?.select(); } }, [mode]);
-
-  const submitRename = async (e) => {
-    e?.preventDefault();
-    const next = name.trim();
-    if (!next || next === project.name) { setMode(null); setName(project.name); return; }
-    setBusy(true); setError("");
-    try {
-      await onRename(project.id, next);
-      setMode(null);
-    } catch (err) {
-      setError(err.message || "Couldn't rename.");
-      setName(project.name);
-    } finally { setBusy(false); }
-  };
+  const isCompleted = Boolean(project.completedAt);
 
   const confirmDelete = async () => {
     setBusy(true); setError("");
     try { await onDelete(project.id); }
-    catch (err) { setError(err.message || "Couldn't delete."); setBusy(false); setMode(null); }
+    catch (err) { setError(err.message || "Couldn't delete."); setBusy(false); setConfirming(false); }
   };
 
-  if (mode === "rename") {
-    return (
-      <form onSubmit={submitRename} style={{ padding: "2px 6px" }}>
-        <input
-          ref={inputRef} className="tfh-input" value={name} disabled={busy}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={submitRename}
-          onKeyDown={(e) => { if (e.key === "Escape") { setMode(null); setName(project.name); } }}
-          style={{ fontSize: 12.5, padding: "5px 8px" }}
-          aria-label={`Rename ${project.name}`}
-        />
-        {error && <div style={{ fontSize: 10.5, color: "var(--pri-high)", padding: "3px 4px" }}>{error}</div>}
-      </form>
-    );
-  }
-
-  if (mode === "confirm-delete") {
+  if (confirming) {
     return (
       <div style={{ padding: "6px 8px", borderRadius: 8, background: "var(--raised)", border: "1px solid var(--pri-high)" }}>
         <div style={{ fontSize: 11, color: "var(--text)", marginBottom: 6, lineHeight: 1.4 }}>
           Delete <strong>{project.name}</strong>? Its tasks, milestones and files go too.
+          {!isCompleted && canComplete && <> If it's finished, drag it to <strong>Completed Projects</strong> instead — nothing is lost.</>}
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button className="tfh-btn tfh-btn-danger" style={{ fontSize: 11, padding: "3px 8px" }} disabled={busy} onClick={confirmDelete}>
             {busy ? "Deleting…" : "Delete"}
           </button>
-          <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 8px" }} disabled={busy} onClick={() => setMode(null)}>Cancel</button>
+          <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "3px 8px" }} disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
         </div>
         {error && <div style={{ fontSize: 10.5, color: "var(--pri-high)", marginTop: 5 }}>{error}</div>}
       </div>
     );
   }
 
+  const draggable = Boolean(dragProps?.draggable);
   return (
-    <div className="tfh-project-row" style={{ display: "flex", alignItems: "center", gap: 2, opacity: dragging ? 0.5 : 1 }}>
+    <div className={`tfh-project-row ${dropHint ? "tfh-drop-hint" : ""}`} style={{ display: "flex", alignItems: "center", gap: 2, opacity: dragging ? 0.45 : 1 }}>
       <button
         onClick={() => onSelect(project.id)}
         {...dragProps}
         className={`tfh-nav-item ${active ? "active" : ""}`}
-        style={{ fontSize: 12.5, padding: "7px 10px", flex: 1, minWidth: 0, cursor: canManage ? "grab" : "pointer" }}
-        title={canManage ? `${project.name} — drag to reorder` : project.name}
+        style={{ fontSize: 12.5, padding: "7px 10px", flex: 1, minWidth: 0, cursor: draggable ? "grab" : "pointer" }}
+        title={draggable
+          ? `${project.name} — drag to reorder, or onto ${isCompleted ? "All projects to reopen it" : "Completed Projects when it's finished"}`
+          : project.name}
       >
-        <span style={{ width: 6, height: 6, borderRadius: 999, background: project.completedAt ? "var(--success)" : "var(--stage-progress)", flexShrink: 0 }} />
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{project.name}</span>
+        <span style={{ width: 6, height: 6, borderRadius: 999, background: isCompleted ? "var(--success)" : "var(--stage-progress)", flexShrink: 0 }} />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isCompleted ? "var(--text-dim)" : undefined }}>{project.name}</span>
       </button>
-      {canManage && (
+      {(canManage || canComplete) && (
         <div className="tfh-project-actions" style={{ display: "flex", gap: 1, flexShrink: 0 }}>
-          <button
-            className="tfh-btn tfh-btn-ghost" style={{ padding: 4 }}
-            onClick={(e) => { e.stopPropagation(); setMode("rename"); }}
-            aria-label={`Rename ${project.name}`} title="Rename"
-          >
-            <Pencil size={11} color="var(--text-faint)" />
-          </button>
-          <button
-            className="tfh-btn tfh-btn-ghost" style={{ padding: 4 }}
-            onClick={(e) => { e.stopPropagation(); setMode("confirm-delete"); }}
-            aria-label={`Delete ${project.name}`} title="Delete"
-          >
-            <Trash2 size={11} color="var(--text-faint)" />
-          </button>
+          {/* The keyboard / touch way to do what the drag does — a drag
+              alone would leave anyone without a mouse unable to file it. */}
+          {canComplete && (
+            <button
+              className="tfh-btn tfh-btn-ghost" style={{ padding: 4 }}
+              onClick={(e) => { e.stopPropagation(); onToggleComplete(project, !isCompleted); }}
+              aria-label={isCompleted ? `Move ${project.name} back to projects` : `Move ${project.name} to Completed Projects`}
+              title={isCompleted ? "Move back to projects" : "Move to Completed Projects"}
+            >
+              {isCompleted ? <ArchiveRestore size={11} color="var(--text-faint)" /> : <FolderCheck size={11} color="var(--text-faint)" />}
+            </button>
+          )}
+          {canComplete && (
+            <button
+              className="tfh-btn tfh-btn-ghost" style={{ padding: 4 }}
+              onClick={(e) => { e.stopPropagation(); onEdit(project); }}
+              aria-label={`Edit ${project.name}`} title="Name, dates and description"
+            >
+              <Pencil size={11} color="var(--text-faint)" />
+            </button>
+          )}
+          {canManage && (
+            <button
+              className="tfh-btn tfh-btn-ghost" style={{ padding: 4 }}
+              onClick={(e) => { e.stopPropagation(); setConfirming(true); }}
+              aria-label={`Delete ${project.name}`} title="Delete"
+            >
+              <Trash2 size={11} color="var(--text-faint)" />
+            </button>
+          )}
         </div>
       )}
     </div>
   );
 };
 
-const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManage, onCreateProject, onReorder, onRenameProject, onDeleteProject }) => {
+/**
+ * PROJECTS in the sidebar: New project, search, "All projects" (the active
+ * ones), and the "Completed Projects" folder directly beneath it.
+ *
+ * Completing a project is a drag: pick a project up and drop it on the
+ * Completed Projects folder. It leaves the regular list at once. Drag one
+ * back out (onto "All projects" or any project in the list) to reopen it.
+ * The same moves are on the small folder button beside each project, for
+ * keyboard and touch. Nothing is deleted either way: a completed project's
+ * tasks, milestones and files stay exactly as they were, it's just filed.
+ */
+const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManage, currentUserId, onCreateProject, onReorder, onDeleteProject, onSetComplete, onEditProject }) => {
   // Collapsed by default — the list opens on demand (see the render below).
-  // A project is almost always selected, so "open it because you're in a
-  // project" would mean always open, which is the problem this solves.
-  // Instead the user's own last choice is remembered, per browser.
+  // The user's own last choice is remembered, per browser.
   const [expanded, setExpanded] = useState(() => {
     try { return localStorage.getItem(PROJECT_LIST_OPEN_KEY) === "1"; } catch { return false; }
   });
@@ -6481,66 +6593,167 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
       return value;
     });
   };
-  const [dragId, setDragId] = useState(null);
-  const [order, setOrder] = useState(null); // local optimistic order of active-project ids while dragging
+
+  // drag = { id, from: "active" | "completed" } while something is held.
+  const [drag, setDrag] = useState(null);
+  const [order, setOrder] = useState(null); // optimistic order of active-project ids while reordering
+  const [hot, setHot] = useState(null); // "completed" | "all" — the folder row lit up as a drop target
+  const dropped = useRef(false);
+  // "Moved X to Completed Projects · Undo" — a drag is quick and easy to do
+  // by accident, so the undo is one click away for a few seconds.
+  const [notice, setNotice] = useState(null);
+  const noticeTimer = useRef(null);
+  useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
 
   const needle = query.trim().toLowerCase();
   const matches = (p) => !needle || String(p.name || "").toLowerCase().includes(needle);
-  // The counts beside "All projects" and "Completed" stay TRUE counts — they
-  // describe the workspace, not the current filter, and a number that moves
-  // as you type reads like projects are disappearing.
+  // The counts stay TRUE counts — they describe the workspace, not the
+  // current search, and a number that moves as you type reads like projects
+  // are disappearing.
   const allActive = projects.filter((p) => !p.completedAt);
   const allCompleted = projects.filter((p) => p.completedAt);
   const active = allActive.filter(matches);
-  const completed = allCompleted.filter(matches);
+  const completed = allCompleted.filter(matches)
+    // Most recently finished first: that's the one you're likely looking for.
+    .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)));
   const searching = needle.length > 0;
 
-  // Apply the optimistic order if we have one, else the server order.
   const orderedActive = order
     ? order.map((id) => active.find((p) => p.id === id)).filter(Boolean)
     : active;
 
-  // Reordering is disabled while a search is active, and this is not a
-  // nicety: the drag maths works on positions within the FULL list, so
-  // dropping B above A in a filtered view would move it above whatever
-  // happens to sit at A's index in the real list — a silent, wrong reorder
-  // that persists to the server.
+  // Who may file a project: the server's rule (requireProjectManager) —
+  // workspace admin/lead, or that project's own lead.
+  const canCompleteProject = (p) => canManage || (currentUserId && p.leadId === currentUserId);
+  // Reordering is disabled while a search is active: the drag maths works on
+  // positions in the FULL list, so a reorder in a filtered view would land in
+  // the wrong place and persist. Filing into Completed is fine either way.
   const canReorder = canManage && !searching;
-  const handleDragStart = (id) => { setDragId(id); if (!order) setOrder(allActive.map((p) => p.id)); };
-  const handleDragOver = (e, overId) => {
+
+  const flash = (text, undo) => {
+    window.clearTimeout(noticeTimer.current);
+    setNotice({ text, undo });
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 7000);
+  };
+
+  const setComplete = async (project, complete, { withUndo = true } = {}) => {
+    try {
+      await onSetComplete(project.id, complete);
+      if (complete) setShowCompleted(false); // filed away, out of sight — that's the point
+      if (withUndo) {
+        flash(
+          complete ? `“${project.name}” moved to Completed Projects` : `“${project.name}” is back in your projects`,
+          () => setComplete(project, !complete, { withUndo: false })
+        );
+      } else {
+        setNotice(null);
+      }
+    } catch (err) {
+      flash(err.message || "Couldn't move that project.", null);
+    }
+  };
+
+  const startDrag = (e, p, from) => {
+    dropped.current = false;
+    // Firefox won't start a drag without data on the transfer.
+    try { e.dataTransfer.setData("text/plain", p.id); e.dataTransfer.effectAllowed = "move"; } catch { /* old browsers */ }
+    setDrag({ id: p.id, from });
+    if (from === "active" && canReorder && !order) setOrder(allActive.map((x) => x.id));
+  };
+  const endDrag = () => {
+    // Let go somewhere that isn't a target: put the list back as it was
+    // rather than leave an unsaved order on screen.
+    if (!dropped.current) setOrder(null);
+    setDrag(null);
+    setHot(null);
+  };
+
+  // Over another ACTIVE project: reorder live (active drags), or accept a
+  // completed project being dragged back out.
+  const overActiveRow = (e, overId) => {
+    if (!drag) return;
+    if (drag.from === "completed") { e.preventDefault(); setHot("all"); return; }
+    if (!canReorder) return;
     e.preventDefault();
-    if (!dragId || dragId === overId) return;
+    if (drag.id === overId) return;
     setOrder((prev) => {
       const base = prev || allActive.map((p) => p.id);
-      const from = base.indexOf(dragId);
+      const from = base.indexOf(drag.id);
       const to = base.indexOf(overId);
       if (from === -1 || to === -1) return base;
       const next = [...base];
       next.splice(from, 1);
-      next.splice(to, 0, dragId);
+      next.splice(to, 0, drag.id);
       return next;
     });
   };
-  const handleDrop = () => {
-    if (order && onReorder) onReorder(order); // persist; parent refreshes projects
-    setDragId(null);
+  const dropOnActiveRow = (e) => {
+    e.preventDefault();
+    dropped.current = true;
+    const held = drag && projects.find((p) => p.id === drag.id);
+    if (held && drag.from === "completed") setComplete(held, false);
+    else if (order && onReorder) onReorder(order);
+    setDrag(null); setHot(null);
   };
+
+  const dropTarget = (kind) => ({
+    onDragOver: (e) => {
+      if (!drag) return;
+      const accepts = kind === "completed" ? drag.from === "active" : drag.from === "completed";
+      if (!accepts) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (hot !== kind) setHot(kind);
+    },
+    onDragLeave: (e) => {
+      if (!e.currentTarget.contains(e.relatedTarget)) setHot((h) => (h === kind ? null : h));
+    },
+    onDrop: (e) => {
+      if (!drag) return;
+      e.preventDefault();
+      dropped.current = true;
+      const held = projects.find((p) => p.id === drag.id);
+      setOrder(null); // a reorder shuffled on the way here is not what was asked for
+      setDrag(null); setHot(null);
+      if (!held) return;
+      if (kind === "completed" && drag.from === "active") setComplete(held, true);
+      if (kind === "all" && drag.from === "completed") setComplete(held, false);
+    },
+  });
+
+  const rowFor = (p, from) => {
+    const mayDrag = from === "active" ? (canReorder || canCompleteProject(p)) : canCompleteProject(p);
+    return (
+      <ProjectRow
+        key={p.id} project={p} active={activeFilter === p.id}
+        canManage={canManage} canComplete={canCompleteProject(p)}
+        onSelect={onSelectProject} onEdit={onEditProject} onDelete={onDeleteProject}
+        onToggleComplete={(proj, complete) => setComplete(proj, complete)}
+        dragging={drag?.id === p.id}
+        dragProps={mayDrag ? {
+          draggable: true,
+          onDragStart: (e) => startDrag(e, p, from),
+          onDragEnd: endDrag,
+          ...(from === "active" ? { onDragOver: (e) => overActiveRow(e, p.id), onDrop: dropOnActiveRow } : {}),
+        } : {}}
+      />
+    );
+  };
+
+  const draggingActive = drag?.from === "active";
+  const draggingCompleted = drag?.from === "completed";
+  const showFolder = allCompleted.length > 0 || canManage || projects.some(canCompleteProject);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 0.5, padding: "0 10px", marginBottom: 4 }}>Projects</div>
       {/* New project sits ABOVE the list and is visible whether or not the
-          list is expanded — buried under a collapsed list it was effectively
-          hidden. Open to every member now, not just managers: anyone can
-          start a piece of work. Renaming, reordering and deleting stay with
-          managers. */}
+          list is expanded. Open to every member. */}
       <div style={{ padding: "0 4px 6px" }}>
         <NewProjectButton onCreateProject={onCreateProject} />
       </div>
 
-      {/* Search sits above the list, where the eye lands after "New project".
-          Only worth the room once there are enough projects to lose one in —
-          below that it is furniture. */}
+      {/* Search: only worth the room once there are enough projects to lose one in. */}
       {allActive.length + allCompleted.length >= 8 && (
         <div className="tfh-project-search">
           <Search size={12} color="var(--text-faint)" />
@@ -6572,20 +6785,22 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
           )}
         </div>
       )}
-      {/* The full project list was pushing everything else out of the
-          sidebar once there were a dozen or more, so it now lives behind
-          "All projects": the row selects the all-projects filter AND opens
-          the list; the chevron alone opens/closes it without changing what
-          you're looking at. It auto-opens when a specific project is
-          selected, so you can always see where you are. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+
+      {/* "All projects": selects the all-projects filter AND opens the list;
+          the chevron alone opens/closes it. While a COMPLETED project is
+          being dragged, it's the drop target that reopens it. */}
+      <div
+        style={{ display: "flex", alignItems: "center", gap: 2, borderRadius: 9 }}
+        className={hot === "all" ? "tfh-drop-target hot" : draggingCompleted ? "tfh-drop-target" : ""}
+        {...dropTarget("all")}
+      >
         <button
           onClick={() => { onSelectProject("all"); setExpandedPersisted(true); }}
           className={`tfh-nav-item ${activeFilter === "all" ? "active" : ""}`}
           style={{ fontSize: 12.5, padding: "7px 10px", flex: 1, minWidth: 0 }}
         >
-          <FolderKanban size={13} /> All projects
-          {allActive.length > 0 && (
+          <FolderKanban size={13} /> {draggingCompleted ? "Drop here to reopen" : "All projects"}
+          {allActive.length > 0 && !draggingCompleted && (
             <span className="tfh-mono" style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--text-faint)" }}>
               {searching ? `${active.length}/${allActive.length}` : allActive.length}
             </span>
@@ -6602,44 +6817,70 @@ const ProjectsSidebarList = ({ projects, activeFilter, onSelectProject, canManag
           {expanded ? <ChevronUp size={13} color="var(--text-faint)" /> : <ChevronDown size={13} color="var(--text-faint)" />}
         </button>
       </div>
-      {expanded && orderedActive.map((p) => (
-        <ProjectRow
-          key={p.id} project={p} active={activeFilter === p.id} canManage={canManage}
-          onSelect={onSelectProject} onRename={onRenameProject} onDelete={onDeleteProject}
-          dragging={dragId === p.id}
-          dragProps={{
-            draggable: canReorder,
-            onDragStart: () => handleDragStart(p.id),
-            onDragOver: (e) => handleDragOver(e, p.id),
-            onDrop: handleDrop,
-            onDragEnd: () => setDragId(null),
-          }}
-        />
-      ))}
+
+      {/* The Completed Projects folder — directly under All projects, where
+          the Chief drew it. Always there for anyone who can file a project,
+          so it's a visible place to drop one even before the first. */}
+      {showFolder && (
+        <>
+          <div
+            className={`tfh-completed-folder ${hot === "completed" ? "tfh-drop-target hot" : draggingActive ? "tfh-drop-target" : ""}`}
+            {...dropTarget("completed")}
+          >
+            <button
+              onClick={() => setShowCompleted((s) => !s)}
+              className="tfh-nav-item"
+              style={{ fontSize: 12.5, padding: "7px 10px", flex: 1, minWidth: 0 }}
+              aria-expanded={showCompleted}
+              title={allCompleted.length ? (showCompleted ? "Hide completed projects" : "Show completed projects") : "Drag a finished project here"}
+            >
+              <FolderCheck size={13} color={hot === "completed" || draggingActive ? "var(--success)" : undefined} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {draggingActive ? "Drop here — project complete" : "Completed Projects"}
+              </span>
+              {!draggingActive && (
+                <span className="tfh-mono" style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--text-faint)" }}>
+                  {searching ? `${completed.length}/${allCompleted.length}` : allCompleted.length}
+                </span>
+              )}
+            </button>
+          </div>
+          {(showCompleted || (searching && completed.length > 0)) && (
+            <div className="tfh-completed-list">
+              {completed.map((p) => rowFor(p, "completed"))}
+              {completed.length === 0 && (
+                <div style={{ fontSize: 11, color: "var(--text-faint)", padding: "4px 10px" }}>
+                  {searching ? "No completed project matches." : "Nothing here yet."}
+                </div>
+              )}
+            </div>
+          )}
+          {allCompleted.length === 0 && draggingActive === false && canManage && expanded && allActive.length > 0 && (
+            <div style={{ fontSize: 10.5, color: "var(--text-faint)", padding: "0 12px 4px", lineHeight: 1.45 }}>
+              Finished a project? Drag it onto Completed Projects.
+            </div>
+          )}
+        </>
+      )}
+
+      {notice && (
+        <div className="tfh-sidebar-notice" role="status">
+          <span style={{ flex: 1, minWidth: 0 }}>{notice.text}</span>
+          {notice.undo && (
+            <button type="button" className="tfh-btn tfh-btn-ghost" style={{ fontSize: 11, padding: "2px 7px", color: "var(--accent)" }} onClick={() => notice.undo()}>
+              Undo
+            </button>
+          )}
+        </div>
+      )}
+
+      {expanded && orderedActive.map((p) => rowFor(p, "active"))}
       {/* A search that finds nothing says so. Silence reads as a broken list. */}
       {expanded && searching && active.length === 0 && completed.length === 0 && (
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", padding: "8px 12px", lineHeight: 1.5 }}>
           No project matching “{query.trim()}”.
         </div>
       )}
-      {expanded && completed.length > 0 && (
-        <>
-          <button
-            onClick={() => setShowCompleted((s) => !s)}
-            style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-faint)", background: "none", border: "none", padding: "6px 10px", cursor: "pointer" }}
-          >
-            {showCompleted ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Completed ({searching ? `${completed.length}/${allCompleted.length}` : allCompleted.length})
-          </button>
-          {showCompleted && completed.map((p) => (
-            <ProjectRow
-              key={p.id} project={p} active={activeFilter === p.id} canManage={canManage}
-              onSelect={onSelectProject} onRename={onRenameProject} onDelete={onDeleteProject}
-              dragProps={{}}
-            />
-          ))}
-        </>
-      )}
-
     </div>
   );
 };
@@ -6690,7 +6931,7 @@ const CreateProjectScreen = ({ canManage, onCreate, workspaceName, logout }) => 
         <div style={{ height: 14 }} />
         <div className="tfh-display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 6 }}>Create your first project</div>
         <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 22, lineHeight: 1.5 }}>
-          Projects keep tasks segregated inside <strong>{workspaceName}</strong> — each one gets its own board, subtasks, and history.
+          Projects keep tasks segregated inside <strong>{workspaceName}</strong> — each one gets its own board, files, and history.
         </div>
         <form onSubmit={submit}>
           <label className="tfh-label" htmlFor="proj-name">Project name</label>
@@ -6874,18 +7115,14 @@ function Workspace() {
   const [searchActivity, setSearchActivity] = useState(null);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
+  // The project whose details (name, dates, description) are open for editing.
+  const [editingProject, setEditingProject] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [uploadPhase, setUploadPhase] = useState(false);
 
   const currentUser = useMemo(() => users.find((u) => u.id === user.id) || { ...user, role: "member" }, [users, user]);
   const canManage = currentUser.role === "admin" || currentUser.role === "lead";
-  // Project-scoped authority: workspace admin/lead, OR this specific
-  // project's own assigned lead. Deliberately NOT used for workspace-level
-  // things (Team invites/roles, holidays) — only for actions scoped to the
-  // currently open project (tasks, milestones, files, project links).
-  const canManageProject = canManage || currentProject?.leadId === user.id;
-
   const loadAll = async (workspaceId) => {
     setLoading(true);
     const [membersRes, notifRes, tasksRes] = await Promise.all([api.getMembers(workspaceId), api.getNotifications(), api.getAllTasks(workspaceId)]);
@@ -7222,7 +7459,9 @@ function Workspace() {
             Then the PROJECTS block, then the remaining menu items. */}
         <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 0.5, padding: "0 10px", marginBottom: 4 }}>Dashboard</div>
-          {visibleNav.filter((n) => ["dashboard", "activity", "board"].includes(n.id)).map((n) => (
+          {/* Files sits directly under Board (the Chief's layout): it's where
+              people go next after the board, not a back-office page. */}
+          {visibleNav.filter((n) => TOP_NAV_IDS.includes(n.id)).map((n) => (
             <React.Fragment key={n.id}>
               <button className={`tfh-nav-item ${view === n.id ? "active" : ""}`} onClick={() => { setView(n.id); setMobileNavOpen(false); }}>
                 <n.icon size={16} /> {n.label}
@@ -7250,9 +7489,11 @@ function Workspace() {
           projects={projects}
           activeFilter={projectFilter}
           canManage={canManage}
+          currentUserId={user.id}
           onCreateProject={createProject}
           onReorder={async (orderedIds) => { await api.reorderProjects(currentId, orderedIds); refreshProjects(); }}
-          onRenameProject={async (id, name) => { await api.renameProject(currentId, id, name); await refreshProjects(); }}
+          onSetComplete={async (id, complete) => { await api.setProjectComplete(currentId, id, complete); await refreshProjects(); }}
+          onEditProject={(p) => setEditingProject(p)}
           onDeleteProject={async (id) => {
             await api.deleteProject(currentId, id);
             const remaining = await refreshProjects();
@@ -7281,7 +7522,7 @@ function Workspace() {
         />
 
         <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          {visibleNav.filter((n) => !["dashboard", "activity", "board"].includes(n.id)).map((n) => (
+          {visibleNav.filter((n) => !TOP_NAV_IDS.includes(n.id)).map((n) => (
             <button key={n.id} className={`tfh-nav-item ${view === n.id ? "active" : ""}`} onClick={() => { setView(n.id); setMobileNavOpen(false); }}>
               <n.icon size={16} /> {n.label}
             </button>
@@ -7292,6 +7533,15 @@ function Workspace() {
             bar (see AccountMenu) — it truncated long names down here, and
             the top-right is where people look for it. */}
       </div>
+
+      {editingProject && (
+        <ProjectDetailsModal
+          workspaceId={currentId}
+          project={editingProject}
+          onClose={() => setEditingProject(null)}
+          onSaved={refreshProjects}
+        />
+      )}
 
       {editProfileOpen && (
         <EditProfileModal
@@ -7373,7 +7623,11 @@ function Workspace() {
             />
           )}
           {view === "milestones" && (
-            <MilestonesView workspaceId={currentId} projectId={projectId} project={currentProject} canManage={canManageProject} isAdmin={currentUser.role === "admin"} users={users} onProjectUpdated={() => refreshProjects()} />
+            <MilestonesView
+              workspaceId={currentId} projects={projects}
+              currentProjectId={projectFilter !== "all" ? projectFilter : projectId}
+              isWorkspaceManager={canManage} currentUserId={user.id}
+            />
           )}
           {view === "admin" && canManage && (
             <AdminPanelView

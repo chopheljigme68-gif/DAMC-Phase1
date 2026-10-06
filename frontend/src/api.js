@@ -102,6 +102,8 @@ export const api = {
     return URL.createObjectURL(blob);
   },
 
+  // Every milestone in the workspace, across projects — the Milestones page.
+  getWorkspaceMilestones: (workspaceId) => request(`/workspaces/${workspaceId}/milestones`),
   getMilestones: (workspaceId, projectId) => request(`/workspaces/${workspaceId}/projects/${projectId}/milestones`),
   createMilestone: (workspaceId, projectId, payload) => request(`/workspaces/${workspaceId}/projects/${projectId}/milestones`, { method: "POST", body: payload }),
   updateMilestone: (workspaceId, projectId, milestoneId, payload) => request(`/workspaces/${workspaceId}/projects/${projectId}/milestones/${milestoneId}`, { method: "PUT", body: payload }),
