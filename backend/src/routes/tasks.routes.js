@@ -15,6 +15,9 @@ const { notify, broadcastTaskChange } = require("../utils/notify");
 const { taskUpload, subtaskUpload } = require("../utils/upload");
 const { normalizeRecurrence, localDateStr } = require("../utils/recurrence");
 const { generateForTask } = require("../utils/recurrenceRunner");
+const {
+  normalizeReminders, getTaskReminders, setTaskReminders, rearmReminders, upcomingSeriesTaskIds,
+} = require("../utils/taskReminders");
 
 const router = express.Router({ mergeParams: true });
 router.use(authenticate, requireWorkspaceMember, requireProjectInWorkspace);
@@ -76,6 +79,14 @@ const isOwnerOf = (userId, task) =>
 
 const canTouchTask = (req, task) => isManager(req) || isOwnerOf(req.user.id, task);
 
+// Deleting is narrower than editing. A task someone ASSIGNED to you is their
+// record of what they asked for: the assignee can work on it, edit it and
+// complete it, but only the person who assigned it may delete it — plus the
+// workspace admin/lead and this project's lead, who manage the project.
+// Self-entered work (you created it) stays yours to delete.
+// Keep in step with canDelete in TaskDialog (App.jsx).
+const canDeleteTask = (req, task) => isManager(req) || (Boolean(task?.createdBy) && task.createdBy === req.user.id);
+
 // The database has a CHECK constraint on status. Without this, a bad value
 // surfaces as a 500 and "Something went wrong on our end" — a client mistake
 // dressed up as a server failure. Kept in step with the constraint.
@@ -106,7 +117,7 @@ router.get("/", async (req, res, next) => {
 // be opened up.
 router.post("/", async (req, res, next) => {
   try {
-    const { title, description, meetingNotes, status, priority, assigneeId, assignee2Id, due, dueTime, endTime, subtasks, links, recurrence } = req.body || {};
+    const { title, description, meetingNotes, status, priority, assigneeId, assignee2Id, due, dueTime, endTime, subtasks, links, recurrence, reminders: rawReminders } = req.body || {};
     if (!title || !title.trim()) return res.status(400).json({ error: "Title is required" });
     if (!assigneeId) return res.status(400).json({ error: "Assignee is required" });
     if (status !== undefined && status !== null && !TASK_STATUSES.includes(status)) {
@@ -132,12 +143,22 @@ router.post("/", async (req, res, next) => {
     const { recurrence: rule, error: ruleError } = normalizeRecurrence(recurrence);
     if (ruleError) return res.status(400).json({ error: ruleError });
     if (rule && !due) return res.status(400).json({ error: "Pick a due date — a repeating activity repeats from its first date" });
+    const { reminders, error: reminderError } = normalizeReminders(rawReminders);
+    if (reminderError) return res.status(400).json({ error: reminderError });
+    if (reminders.length && !due) return res.status(400).json({ error: "Pick a due date — a reminder counts back from it" });
 
     const task = await createTask({
       title: title.trim(), description, meetingNotes, status, priority, assigneeId, assignee2Id: assignee2Id || null, due, dueTime, endTime, subtasks, links,
       recurrence: rule,
       createdBy: req.user.id, workspaceId: req.params.workspaceId, projectId: req.params.projectId,
     });
+
+    // Reminders BEFORE the occurrences are generated: each new occurrence
+    // copies the head's reminders as it is created.
+    if (reminders.length) {
+      await setTaskReminders([task.id], reminders, req.user.id);
+      task.reminderCount = reminders.length;
+    }
 
     // Materialise the upcoming occurrences now, so they're on the board the
     // moment the dialog closes instead of on the next hourly sweep.
@@ -331,6 +352,11 @@ router.patch("/:id", async (req, res, next) => {
       await deleteUntouchedFutureOccurrences(task.id, localDateStr());
       if (task.recurrence) await generateForTask(task.id);
     }
+    // A task moved to another day or time takes its reminders with it: one
+    // whose new moment is still ahead is armed again, one already past is
+    // settled without firing.
+    if (patch.due !== undefined || patch.dueTime !== undefined) await rearmReminders([task.id]);
+
     const members = await getWorkspaceMembers(req.params.workspaceId);
     const admin = members.find((m) => m.role === "admin");
 
@@ -375,6 +401,41 @@ router.put("/:id/subtasks", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ---------------- reminders ----------------
+// Anyone in the workspace can see a task's reminders; setting them follows
+// the editing rule (managers, and the task's creator or assignees).
+
+router.get("/:id/reminders", async (req, res, next) => {
+  try {
+    const task = await assertBelongsToProject(req.params.id, req.params.projectId);
+    if (!task) return res.status(404).json({ error: "Task not found" });
+    res.json({ reminders: await getTaskReminders(task.id) });
+  } catch (err) { next(err); }
+});
+
+// Replaces the whole set — the dialog sends what the person sees.
+// { reminders: [{minutesBefore, method}], scope: "this" | "series" }
+// "series" applies the same reminders to every upcoming, unfinished
+// occurrence of a repeating activity, as Google Calendar's "all events".
+router.put("/:id/reminders", async (req, res, next) => {
+  try {
+    const task = await assertBelongsToProject(req.params.id, req.params.projectId);
+    if (!task) return res.status(404).json({ error: "Task not found" });
+    if (!canTouchTask(req, task)) {
+      return res.status(403).json({ error: "Only the task's creator, its assignees, the admin or a lead can set its reminders" });
+    }
+    const { reminders, error } = normalizeReminders(req.body?.reminders);
+    if (error) return res.status(400).json({ error });
+    if (reminders.length && !task.due) return res.status(400).json({ error: "Pick a due date — a reminder counts back from it" });
+
+    const inSeries = Boolean(task.recurrence || task.recurrenceParentId);
+    const ids = req.body?.scope === "series" && inSeries ? await upcomingSeriesTaskIds(task) : [task.id];
+    await setTaskReminders(ids, reminders, req.user.id);
+    broadcastTaskChange(req.params.workspaceId, { reason: "reminders", taskId: task.id, projectId: req.params.projectId });
+    res.json({ reminders: await getTaskReminders(task.id), updatedTasks: ids.length });
+  } catch (err) { next(err); }
+});
+
 router.delete("/:id", async (req, res, next) => {
   try {
     // 404 before 403 deliberately: whether a task exists in a project you
@@ -382,11 +443,15 @@ router.delete("/:id", async (req, res, next) => {
     // task we haven't loaded would mean guessing.
     const existing = await assertBelongsToProject(req.params.id, req.params.projectId);
     if (!existing) return res.status(404).json({ error: "Task not found" });
-    // Same boundary as editing: yours to delete if it is assigned to you or
-    // you created it. A member cannot delete work that belongs to two other
-    // people, which is the case this rule exists to protect.
-    if (!isManager(req) && !isOwnerOf(req.user.id, existing)) {
-      return res.status(403).json({ error: "You can only delete a task assigned to you or one you created" });
+    // Only the person who assigned it (its creator), or the admin, a team
+    // lead or this project's lead. Being an assignee — first or second slot —
+    // is not enough: see canDeleteTask.
+    if (!canDeleteTask(req, existing)) {
+      return res.status(403).json({
+        error: isOwnerOf(req.user.id, existing)
+          ? "This task was assigned to you, so only the person who assigned it (or the admin or a lead) can delete it"
+          : "You can only delete a task you created",
+      });
     }
     // Deleting one occurrence has to STICK. The generator fills in missing
     // dates for a series, so without recording this date as an exception

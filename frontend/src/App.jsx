@@ -85,6 +85,7 @@ const NOTIF_LABEL = {
   link: "new link",
   invited: "added to workspace",
   due_soon: "due soon",
+  reminder: "reminder",
 };
 
 const POST_SUGGESTIONS = [
@@ -487,6 +488,11 @@ const TaskCard = ({ task, users, onOpen, onComplete, onReopen, canManage, curren
             <Repeat size={10} /> Repeats
           </span>
         )}
+        {task.reminderCount > 0 && task.status !== "done" && (
+          <span className="tfh-chip" style={{ background: "var(--raised)", color: "var(--text-dim)" }} title={`${task.reminderCount} reminder${task.reminderCount === 1 ? "" : "s"} set`}>
+            <Bell size={10} />
+          </span>
+        )}
         {SUBTASKS_ENABLED && total > 0 && (
           <span className="tfh-chip tfh-mono" style={{ background: "var(--raised)", color: "var(--text-dim)" }}>
             {done}/{total}
@@ -547,6 +553,9 @@ const emptyDraft = (status, users, currentUserId, projectId) => ({
   assigneeId: currentUserId || users[0]?.id || "", assignee2Id: null, due: localDateStr(new Date()),
   dueTime: "", endTime: "", subtasks: [], pendingLinks: [], pendingFiles: [], projectId: projectId || "",
   recurrence: null,
+  // Reminder rows as the editor shows them; [] for a new task. On an
+  // existing task this starts null (loading) and is filled from the server.
+  reminderRows: [], originalReminders: [], remindersForSeries: false,
 });
 
 const DeleteButton = ({ onConfirm }) => {
@@ -1334,6 +1343,182 @@ const PendingFilesLinks = ({ draft, setDraft }) => {
 };
 
 /* ------------------------------------------------------------------ */
+/* Reminders — set like Google Calendar's event notifications            */
+/* ------------------------------------------------------------------ */
+// Each row reads like Google's: [Notification ▾] [10] [minutes ▾] before.
+// Stored on the server as minutesBefore + method; the amount/unit split is
+// only how a person types it.
+const REMINDER_UNITS = [
+  { id: "minutes", label: "minutes", minutes: 1 },
+  { id: "hours", label: "hours", minutes: 60 },
+  { id: "days", label: "days", minutes: 1440 },
+  { id: "weeks", label: "weeks", minutes: 10080 },
+];
+const MAX_REMINDERS = 5;
+const MAX_REMINDER_MINUTES = 4 * 10080;
+// Office time is Bhutan (UTC+6, no daylight saving) — the same zone the
+// server fires reminders in, so the preview shows what will really happen.
+const OFFICE_UTC_OFFSET_MIN = 6 * 60;
+const ALL_DAY_REMINDER_TIME = "09:00";
+
+// minutesBefore → the largest whole unit, as a person would say it.
+const reminderToRow = (r, i) => {
+  const unit = [...REMINDER_UNITS].reverse().find((u) => r.minutesBefore % u.minutes === 0 && r.minutesBefore >= u.minutes) || REMINDER_UNITS[0];
+  return { key: r.id || `r${i}-${r.minutesBefore}-${r.method}`, method: r.method || "notification", amount: String(r.minutesBefore / unit.minutes), unit: unit.id };
+};
+const rowToMinutes = (row) => {
+  const unit = REMINDER_UNITS.find((u) => u.id === row.unit) || REMINDER_UNITS[0];
+  const n = Number(row.amount);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * unit.minutes) : NaN;
+};
+// What the server receives. Rows that are blank or out of range are left out
+// and flagged in the editor rather than silently saved as something else.
+const rowsToReminders = (rows) =>
+  (rows || [])
+    .map((row) => ({ minutesBefore: rowToMinutes(row), method: row.method }))
+    .filter((r) => Number.isInteger(r.minutesBefore) && r.minutesBefore >= 0 && r.minutesBefore <= MAX_REMINDER_MINUTES);
+const remindersKey = (list) => JSON.stringify((list || []).map((r) => `${r.minutesBefore}:${r.method}`).sort());
+
+// When a reminder will go off, in office time: "Thu 22 Oct, 9:50 AM".
+const reminderFiresAt = (due, dueTime, minutesBefore) => {
+  if (!due || !Number.isFinite(minutesBefore)) return null;
+  const [y, m, d] = due.split("-").map(Number);
+  const [hh, mm] = (dueTime || ALL_DAY_REMINDER_TIME).split(":").map(Number);
+  // Arithmetic on "office wall-clock as if UTC", then read the fields back.
+  const at = new Date(Date.UTC(y, m - 1, d, hh, mm) - minutesBefore * 60000);
+  const iso = `${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, "0")}-${String(at.getUTCDate()).padStart(2, "0")}`;
+  const clockStr = `${String(at.getUTCHours()).padStart(2, "0")}:${String(at.getUTCMinutes()).padStart(2, "0")}`;
+  const nowOffice = Date.now() + OFFICE_UTC_OFFSET_MIN * 60000;
+  return { label: `${dayAndDate(iso)}, ${formatTimeLabel(clockStr)}`, past: at.getTime() <= nowOffice };
+};
+
+const RemindersField = ({ draft, setDraft, disabled }) => {
+  const rows = draft.reminderRows;
+  const loading = Boolean(draft.id) && rows === null;
+  const hasDue = Boolean(draft.due);
+  const inSeries = Boolean(draft.id) && Boolean(draft.recurrence || draft.recurrenceParentId);
+  const changed = Boolean(draft.id) && rows && remindersKey(rowsToReminders(rows)) !== remindersKey(draft.originalReminders || []);
+  const [permission, setPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
+
+  const setRows = (next) => setDraft({ ...draft, reminderRows: next });
+  const update = (key, patch) => setRows(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const add = () => {
+    // Google's defaults: 30 minutes before a timed event, the day before an
+    // all-day one. Skip any already in the list so "Add" always adds.
+    const taken = new Set(rowsToReminders(rows).map((r) => `${r.minutesBefore}:${r.method}`));
+    const candidates = draft.dueTime ? [30, 10, 60, 1440, 0, 120] : [1440, 0, 2880, 10080];
+    const minutes = candidates.find((m) => !taken.has(`${m}:notification`)) ?? 15;
+    const row = reminderToRow({ minutesBefore: minutes, method: "notification" }, Date.now());
+    setRows([...(rows || []), { ...row, key: `new-${Date.now()}` }]);
+  };
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <label className="tfh-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <Bell size={11} /> Reminders
+        <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional — sent to the assignees)</span>
+      </label>
+
+      {!hasDue ? (
+        <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Set a due date to add reminders.</div>
+      ) : loading ? (
+        <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Loading reminders…</div>
+      ) : (
+        <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {(rows || []).map((row) => {
+              const minutes = rowToMinutes(row);
+              const invalid = !Number.isInteger(minutes) || minutes < 0 || minutes > MAX_REMINDER_MINUTES;
+              const fires = invalid ? null : reminderFiresAt(draft.due, draft.dueTime, minutes);
+              return (
+                <div key={row.key} className="tfh-reminder-row">
+                  <select
+                    className="tfh-input" disabled={disabled} value={row.method}
+                    onChange={(e) => update(row.key, { method: e.target.value })}
+                    aria-label="How to remind" style={{ width: 136, fontSize: 12.5 }}
+                  >
+                    <option value="notification">Notification</option>
+                    <option value="email">Email</option>
+                  </select>
+                  <input
+                    className="tfh-input" type="number" min="0" step="1" disabled={disabled}
+                    value={row.amount} onChange={(e) => update(row.key, { amount: e.target.value })}
+                    aria-label="How long before" style={{ width: 70, fontSize: 12.5, borderColor: invalid ? "var(--pri-high)" : undefined }}
+                  />
+                  <select
+                    className="tfh-input" disabled={disabled} value={row.unit}
+                    onChange={(e) => update(row.key, { unit: e.target.value })}
+                    aria-label="Unit" style={{ width: 104, fontSize: 12.5 }}
+                  >
+                    {REMINDER_UNITS.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
+                  </select>
+                  <span style={{ fontSize: 12, color: "var(--text-dim)" }}>before</span>
+                  <span
+                    className="tfh-reminder-when"
+                    style={{ color: invalid ? "var(--pri-high)" : fires?.past ? "var(--text-faint)" : "var(--text-dim)" }}
+                  >
+                    {invalid
+                      ? "0 minutes to 4 weeks"
+                      : fires && (fires.past ? `${fires.label} · already passed` : `→ ${fires.label}`)}
+                  </span>
+                  {!disabled && (
+                    <button
+                      type="button" className="tfh-btn tfh-btn-ghost" style={{ padding: 4, marginLeft: "auto" }}
+                      onClick={() => setRows(rows.filter((r) => r.key !== row.key))} aria-label="Remove reminder" title="Remove"
+                    >
+                      <X size={13} color="var(--text-faint)" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {!disabled && (rows || []).length < MAX_REMINDERS && (
+            <button type="button" className="tfh-btn tfh-btn-ghost" onClick={add} style={{ fontSize: 12, padding: "4px 8px", marginTop: 6 }}>
+              <Plus size={12} /> Add reminder
+            </button>
+          )}
+
+          {(rows || []).length > 0 && !draft.dueTime && (
+            <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 6 }}>
+              No start time set, so reminders count back from 9:00 AM on the due date.
+            </div>
+          )}
+
+          {inSeries && changed && !disabled && (
+            <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: "var(--text-dim)", marginTop: 8, cursor: "pointer" }}>
+              <input
+                type="checkbox" checked={!!draft.remindersForSeries}
+                onChange={(e) => setDraft({ ...draft, remindersForSeries: e.target.checked })}
+              />
+              Apply to all upcoming repeats of this activity
+            </label>
+          )}
+
+          {/* Desktop pop-ups are what make a reminder noticeable while you're
+              in another window — offer them where they matter. */}
+          {(rows || []).some((r) => r.method === "notification") && permission === "default" && (
+            <button
+              type="button"
+              onClick={async () => setPermission(await Notification.requestPermission())}
+              style={{ display: "block", background: "none", border: "none", padding: 0, marginTop: 8, fontSize: 11.5, color: "var(--accent)", cursor: "pointer" }}
+            >
+              Allow desktop pop-ups, so reminders show even when PMDAMC is in the background
+            </button>
+          )}
+          {(rows || []).some((r) => r.method === "notification") && permission === "denied" && (
+            <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 8 }}>
+              Desktop pop-ups are blocked in this browser, so reminders will appear in the bell only. Allow notifications for this site in the browser's settings to get pop-ups.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
 /* Recurring activities — the "does this repeat?" control               */
 /* ------------------------------------------------------------------ */
 // Mirrors the rule shape the backend stores and validates (see
@@ -1526,7 +1711,14 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
   const canEditFields = !draft.id || canManage || isOwnTask;
   const canAttach = canManage || isOwnTask;
   const canChangeAssignee = !draft.id || canManage;
-  const canDelete = Boolean(draft.id) && (canManage || isOwnTask);
+  // Deleting is narrower than editing: an assignee can work on a task someone
+  // gave them but not delete it — only the person who assigned it can (plus
+  // the admin, team leads and this project's lead). Same rule as the server's
+  // canDeleteTask.
+  const canDelete = Boolean(draft.id) && (canManage || (Boolean(draft.createdBy) && draft.createdBy === currentUserId));
+  const deleteBlockedReason = Boolean(draft.id) && !canDelete && isAssignedTo(draft, currentUserId)
+    ? `Only ${draft.createdByName || "the person who assigned this"}, or the admin or a lead, can delete it.`
+    : "";
 
   const addSubtask = (fields) => {
     setDraft({ ...draft, subtasks: [...draft.subtasks, { id: `local-${Date.now()}`, done: false, attachmentCount: 0, linkCount: 0, ...fields }] });
@@ -1682,6 +1874,10 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
           onStopSeries={(stop) => setDraft({ ...draft, stopSeries: stop })}
         />
 
+        {/* Setting reminders follows the same rule as attaching to a task:
+            its creator, its assignees, and managers (server: canTouchTask). */}
+        <RemindersField draft={draft} setDraft={setDraft} disabled={Boolean(draft.id) && !canAttach} />
+
         <div style={{ marginBottom: 14 }}>
           <label className="tfh-label">Project</label>
           <select
@@ -1738,7 +1934,11 @@ const TaskDialog = ({ draft, setDraft, users, projects, onClose, onSave, onDelet
         )}
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid var(--line)", paddingTop: 16, marginTop: saveError ? 0 : undefined }}>
-          {canDelete ? <DeleteButton onConfirm={() => onDelete(draft.id)} /> : <span />}
+          {canDelete ? <DeleteButton onConfirm={() => onDelete(draft.id)} /> : (
+            deleteBlockedReason
+              ? <span style={{ fontSize: 11, color: "var(--text-faint)", maxWidth: 220, lineHeight: 1.4 }} title="Tasks assigned to you can only be deleted by whoever assigned them">{deleteBlockedReason}</span>
+              : <span />
+          )}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
             {/* Mark complete — the old Stage dropdown, as a tick. Sits with
                 the footer actions because that's the moment you reach for
@@ -3871,12 +4071,7 @@ const ReportPanel = ({ workspaceId, users, projects, currentUser, canManage }) =
         from: from || undefined,
         to: to || undefined,
       });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = fileName;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-      setDone(fileName);
+      setDone(saveReportBlob({ blob, fileName }));
     } catch (err) {
       setError(err.message || "Couldn't build the report.");
     } finally {
@@ -3925,6 +4120,98 @@ const ReportPanel = ({ workspaceId, users, projects, currentUser, canManage }) =
         </button>
       </div>
       {error && <div style={{ fontSize: 12, color: "var(--pri-high)", marginTop: 10 }}>{error}</div>}
+      {done && <div style={{ fontSize: 12, color: "var(--stage-done)", marginTop: 10 }}>Saved {done}</div>}
+    </div>
+  );
+};
+
+// Saves a report the server built. Shared by the team and project reports.
+const saveReportBlob = ({ blob, fileName }) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = fileName;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  return fileName;
+};
+
+/**
+ * Project report — one project, everything that happened on it, in date
+ * order (a project diary), on DAMC letterhead. Offered to the admin, team
+ * leads and each project's own lead (the server enforces the same rule); a
+ * project lead only sees the projects they lead.
+ */
+const ProjectReportPanel = ({ workspaceId, projects, currentUser, canManage, initialProjectId }) => {
+  const reportable = (projects || []).filter((p) => canManage || p.leadId === currentUser.id);
+  const sorted = [
+    ...reportable.filter((p) => !p.completedAt).sort((a, b) => a.name.localeCompare(b.name)),
+    ...reportable.filter((p) => p.completedAt).sort((a, b) => a.name.localeCompare(b.name)),
+  ];
+  const [projectId, setProjectId] = useState(() => (sorted.some((p) => p.id === initialProjectId) ? initialProjectId : ""));
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState("");
+
+  if (!sorted.length) return null;
+
+  const download = async () => {
+    if (!projectId) { setError("Choose the project first."); return; }
+    if (from && to && from > to) { setError("The From date must be on or before the To date."); return; }
+    setBusy(true); setError(""); setDone("");
+    try {
+      setDone(saveReportBlob(await api.downloadProjectReport(workspaceId, { projectId, from: from || undefined, to: to || undefined })));
+    } catch (err) {
+      setError(err.message || "Couldn't build the project report.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const active = sorted.filter((p) => !p.completedAt);
+  const finished = sorted.filter((p) => p.completedAt);
+
+  return (
+    <div className="tfh-card" style={{ padding: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <FolderKanban size={15} color="var(--accent)" />
+        <span style={{ fontSize: 13.5, fontWeight: 700 }}>Project report (Word)</span>
+      </div>
+      <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 14, lineHeight: 1.5 }}>
+        Everything that happened on one project, in date order: a timeline, then every activity in full —
+        who did it, when, status, how late, notes, comments, files and links — plus milestones and
+        day-book entries tagged to the project. Leave the dates empty for the whole history.
+      </div>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div style={{ minWidth: 240, flex: "1 1 240px", maxWidth: 360 }}>
+          <label className="tfh-label" htmlFor="tfh-project-report-project">Project</label>
+          <select
+            id="tfh-project-report-project" className="tfh-input" style={{ fontSize: 12.5 }}
+            value={projectId} onChange={(e) => { setProjectId(e.target.value); setError(""); }}
+          >
+            <option value="" disabled>Choose a project…</option>
+            {active.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {finished.length > 0 && (
+              <optgroup label="Completed Projects">
+                {finished.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </optgroup>
+            )}
+          </select>
+        </div>
+        <div style={{ minWidth: 150 }}>
+          <label className="tfh-label">From (optional)</label>
+          <DateField value={from} onChange={setFrom} ariaLabel="Project report from" />
+        </div>
+        <div style={{ minWidth: 150 }}>
+          <label className="tfh-label">To (optional)</label>
+          <DateField value={to} onChange={setTo} ariaLabel="Project report to" />
+        </div>
+        <button className="tfh-btn tfh-btn-accent" onClick={download} disabled={busy} style={{ flexShrink: 0 }}>
+          <Download size={14} /> {busy ? "Building…" : "Download project report"}
+        </button>
+      </div>
+      {error && <div role="alert" style={{ fontSize: 12, color: "var(--pri-high)", marginTop: 10 }}>{error}</div>}
       {done && <div style={{ fontSize: 12, color: "var(--stage-done)", marginTop: 10 }}>Saved {done}</div>}
     </div>
   );
@@ -4024,6 +4311,11 @@ const TeamView = ({ tasks, users, currentUser, onOpen, onSetRole, onSetTitle, on
 
       <ReportPanel
         workspaceId={workspaceId} users={users} projects={projects}
+        currentUser={currentUser} canManage={canManage}
+      />
+
+      <ProjectReportPanel
+        workspaceId={workspaceId} projects={projects}
         currentUser={currentUser} canManage={canManage}
       />
 
@@ -5590,6 +5882,14 @@ const MilestoneAttachmentsMini = ({ workspaceId, projectId, milestoneId, attachm
  * different things at once.
  */
 const ProjectDetailsModal = ({ workspaceId, project, onClose, onSaved }) => {
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportNote, setReportNote] = useState("");
+  const downloadReport = async () => {
+    setReportBusy(true); setReportNote("");
+    try { setReportNote(`Saved ${saveReportBlob(await api.downloadProjectReport(workspaceId, { projectId: project.id }))}`); }
+    catch (err) { setReportNote(err.message || "Couldn't build the project report."); }
+    finally { setReportBusy(false); }
+  };
   const [name, setName] = useState(project.name || "");
   const [description, setDescription] = useState(project.description || "");
   const [deadline, setDeadline] = useState(project.deadline || "");
@@ -5646,7 +5946,16 @@ const ProjectDetailsModal = ({ workspaceId, project, onClose, onSaved }) => {
           {" "}The project's lead is set under Team.
         </div>
         {error && <div role="alert" style={{ fontSize: 12, color: "var(--pri-high)", marginBottom: 12 }}>{error}</div>}
+        {reportNote && <div style={{ fontSize: 11.5, color: reportNote.startsWith("Saved") ? "var(--stage-done)" : "var(--pri-high)", marginBottom: 10 }}>{reportNote}</div>}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+          {/* The whole project's history as a Word document, in date order.
+              Date-ranged copies are on the Team page. */}
+          <button
+            type="button" className="tfh-btn tfh-btn-ghost" onClick={downloadReport} disabled={reportBusy}
+            style={{ marginRight: "auto" }} title="Every activity on this project, in date order, as a Word document"
+          >
+            <Download size={13} /> {reportBusy ? "Building…" : "Project report"}
+          </button>
           <button type="button" className="tfh-btn" onClick={onClose} disabled={saving}>Cancel</button>
           <button className="tfh-btn tfh-btn-accent" disabled={saving || !name.trim()}>{saving ? "Saving…" : "Save"}</button>
         </div>
@@ -7149,7 +7458,23 @@ function Workspace() {
     const onNotification = (notif) => {
       setNotifications((prev) => [notif, ...prev]);
       if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-        new Notification("Team Flow Hub", { body: notif.message });
+        const isReminder = notif.type === "reminder";
+        try {
+          const popup = new Notification(isReminder ? "PMDAMC reminder" : "PMDAMC", {
+            body: isReminder ? notif.message.replace(/^Reminder: /, "") : notif.message,
+            icon: "/logo.png",
+            // One pop-up per reminder even if several tabs are open, and a
+            // reminder stays on screen until dealt with, as a calendar's does.
+            tag: `pmdamc-${notif.id}`,
+            requireInteraction: isReminder,
+          });
+          // Clicking it brings PMDAMC forward and opens the task.
+          popup.onclick = () => {
+            window.focus();
+            if (notif.taskId) openEditByIdRef.current?.(notif.taskId);
+            popup.close();
+          };
+        } catch { /* some browsers only allow pop-ups from a service worker; the bell still has it */ }
       }
     };
     const onTaskChanged = (payload) => {
@@ -7199,8 +7524,24 @@ function Workspace() {
   const openCreate = (status = "todo") => { setDraft(emptyDraft(status, users, user.id, projectId)); setSaveError(""); };
   // Assign Task → new-task dialog prefilled with this member as assignee.
   const openCreateFor = (member) => { setDraft({ ...emptyDraft("todo", users, member.id, projectId), assigneeId: member.id }); setSaveError(""); };
-  const openEdit = (task) => { setDraft({ ...task, originalProjectId: task.projectId, subtasks: task.subtasks.map((s) => ({ ...s })) }); setSaveError(""); };
+  const openEdit = (task) => {
+    setDraft({ ...task, originalProjectId: task.projectId, subtasks: task.subtasks.map((s) => ({ ...s })), reminderRows: task.reminderCount ? null : [], originalReminders: [], remindersForSeries: false });
+    setSaveError("");
+    // Reminders live in their own table and load on open. Only applied if
+    // the same task is still open by the time they arrive.
+    if (task.reminderCount) {
+      api.getTaskReminders(currentId, task.projectId, task.id)
+        .then(({ reminders }) => setDraft((prev) => (prev && prev.id === task.id
+          ? { ...prev, reminderRows: reminders.map(reminderToRow), originalReminders: reminders.map(({ minutesBefore, method }) => ({ minutesBefore, method })) }
+          : prev)))
+        .catch(() => setDraft((prev) => (prev && prev.id === task.id ? { ...prev, reminderRows: [], remindersError: true } : prev)));
+    }
+  };
   const openEditById = (id) => { const t = tasks.find((x) => x.id === id); if (t) openEdit(t); };
+  // The socket handler is registered once; the ref always points at the
+  // current openEditById so a pop-up click opens the task from today's list.
+  const openEditByIdRef = useRef(openEditById);
+  openEditByIdRef.current = openEditById;
   const closeDialog = () => { setDraft(null); setSaveError(""); };
 
   // The Collaboration Log module was removed — activities are created and
@@ -7266,7 +7607,22 @@ function Workspace() {
           patch.projectId = taskProjectId;
         }
         await api.updateTask(currentId, routeProjectId, draft.id, patch);
-        const { task } = await api.setSubtasks(currentId, patch.projectId || routeProjectId, draft.id, cleanSubtasks);
+        let { task } = await api.setSubtasks(currentId, patch.projectId || routeProjectId, draft.id, cleanSubtasks);
+        // Reminders: only sent when they actually changed (and loaded), and
+        // AFTER the task update so they count back from the new date/time.
+        if ((canManage || isOwnTask) && draft.due && Array.isArray(draft.reminderRows)) {
+          const wanted = rowsToReminders(draft.reminderRows);
+          if (remindersKey(wanted) !== remindersKey(draft.originalReminders)) {
+            try {
+              await api.setTaskReminders(currentId, patch.projectId || routeProjectId, draft.id, wanted, draft.remindersForSeries ? "series" : "this");
+              task = { ...task, reminderCount: wanted.length };
+            } catch (err) {
+              setTasks((prev) => prev.map((t) => (t.id === task.id ? task : t)));
+              setSaveError(`Saved, but the reminders didn't: ${err.message}`);
+              return;
+            }
+          }
+        }
         savedTask = task;
         taskId = draft.id;
       } else {
@@ -7278,6 +7634,8 @@ function Workspace() {
         const { task } = await api.createTask(currentId, taskProjectId, {
           title, description, meetingNotes: meetingNotes || "", status, priority, assigneeId, assignee2Id: assignee2Id || null, due, dueTime, endTime: endTime || null,
           recurrence: recurrence || null,
+          // Reminders count back from the due date, so none without one.
+          reminders: due ? rowsToReminders(draft.reminderRows) : [],
           subtasks: cleanSubtasks, links: draft.pendingLinks,
         });
         savedTask = task;

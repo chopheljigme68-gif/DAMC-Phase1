@@ -43,6 +43,36 @@ async function request(path, { method = "GET", body, auth = true, headers: extra
   return data;
 }
 
+// Shared by both Word reports: bytes, not JSON, and the server picks the
+// filename (read back out of Content-Disposition).
+async function downloadReport(workspaceId, file, { userId, projectId, from, to } = {}) {
+  const params = new URLSearchParams();
+  if (userId) params.set("userId", userId);
+  if (projectId) params.set("projectId", projectId);
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  const query = params.toString();
+  const res = await fetch(`${API_URL}/api/workspaces/${workspaceId}/reports/${file}${query ? `?${query}` : ""}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  });
+  if (!res.ok) {
+    // A JSON body means the endpoint ran and refused for a reason worth
+    // showing. A NON-JSON 404 means the request never reached the report
+    // route at all — nearly always a backend still running the previous
+    // build — so say that instead of a bare status code nobody can act on.
+    let message = null;
+    try { message = (await res.json()).error; } catch { /* not JSON */ }
+    if (message) throw new Error(message);
+    if (res.status === 404) {
+      throw new Error("The server has no report endpoint yet — the backend is still running the previous build. Run npm install in backend/ and restart it.");
+    }
+    throw new Error(`Report failed (${res.status})`);
+  }
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = /filename="([^"]+)"/.exec(disposition);
+  return { blob: await res.blob(), fileName: match ? match[1] : "DAMC-Report.docx" };
+}
+
 export const api = {
   API_URL,
   getToken,
@@ -165,6 +195,10 @@ export const api = {
   createTasksBulk: (workspaceId, projectId, payload) => request(`/workspaces/${workspaceId}/projects/${projectId}/tasks/bulk`, { method: "POST", body: payload }),
   updateTask: (workspaceId, projectId, id, patch) => request(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${id}`, { method: "PATCH", body: patch }),
   setSubtasks: (workspaceId, projectId, id, subtasks) => request(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${id}/subtasks`, { method: "PUT", body: { subtasks } }),
+  // Reminders (Google Calendar style). PUT replaces the whole set; scope
+  // "series" also applies it to every upcoming repeat of the activity.
+  getTaskReminders: (workspaceId, projectId, taskId) => request(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/reminders`),
+  setTaskReminders: (workspaceId, projectId, taskId, reminders, scope = "this") => request(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/reminders`, { method: "PUT", body: { reminders, scope } }),
   deleteTask: (workspaceId, projectId, id) => request(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${id}`, { method: "DELETE" }),
 
   getSubtaskAttachments: (workspaceId, projectId, taskId, subtaskId) =>
@@ -265,33 +299,9 @@ export const api = {
   // The Word report. Comes back as bytes, not JSON, and the server picks the
   // filename — which is read back out of Content-Disposition so the download
   // is named the same thing the server called it.
-  downloadTeamReport: async (workspaceId, { userId, projectId, from, to } = {}) => {
-    const params = new URLSearchParams();
-    if (userId) params.set("userId", userId);
-    if (projectId) params.set("projectId", projectId);
-    if (from) params.set("from", from);
-    if (to) params.set("to", to);
-    const query = params.toString();
-    const res = await fetch(`${API_URL}/api/workspaces/${workspaceId}/reports/team.docx${query ? `?${query}` : ""}`, {
-      headers: { Authorization: `Bearer ${getToken()}` },
-    });
-    if (!res.ok) {
-      // A JSON body means the endpoint ran and refused for a reason worth
-      // showing. A NON-JSON 404 means the request never reached the report
-      // route at all — nearly always a backend still running the previous
-      // build — so say that instead of a bare status code nobody can act on.
-      let message = null;
-      try { message = (await res.json()).error; } catch { /* not JSON */ }
-      if (message) throw new Error(message);
-      if (res.status === 404) {
-        throw new Error("The server has no report endpoint yet — the backend is still running the previous build. Run npm install in backend/ and restart it.");
-      }
-      throw new Error(`Report failed (${res.status})`);
-    }
-    const disposition = res.headers.get("Content-Disposition") || "";
-    const match = /filename="([^"]+)"/.exec(disposition);
-    return { blob: await res.blob(), fileName: match ? match[1] : "DAMC-Report.docx" };
-  },
+  downloadTeamReport: (workspaceId, opts = {}) => downloadReport(workspaceId, "team.docx", opts),
+  // One project, everything on it in date order.
+  downloadProjectReport: (workspaceId, opts = {}) => downloadReport(workspaceId, "project.docx", opts),
 
   getNotifications: () => request("/notifications"),
   markNotificationRead: (id) => request(`/notifications/${id}/read`, { method: "PATCH" }),

@@ -711,3 +711,25 @@ BEGIN
       CHECK (accent_tint IS NULL OR accent_tint IN ('off', 'subtle', 'rich'));
   END IF;
 END $$;
+
+/* ---------------- task reminders (Google Calendar style) ---------------- */
+-- Reminders on a task, set like a calendar event's notifications:
+-- "10 minutes before" or "1 day before", by in-app notification or email.
+-- minutes_before counts back from the task's start: due date + due_time,
+-- or 9:00 AM office time on the due date for a task with no time. sent_at is
+-- set when the reminder goes out. The sweep claims rows by setting it, so a
+-- reminder fires once even with two server instances running. It is also set
+-- (without sending) for a reminder whose moment had already passed when it
+-- was created or rescheduled, so nothing fires late.
+CREATE TABLE IF NOT EXISTS task_reminders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  minutes_before INT NOT NULL CHECK (minutes_before BETWEEN 0 AND 40320),
+  method TEXT NOT NULL DEFAULT 'notification' CHECK (method IN ('notification', 'email')),
+  sent_at TIMESTAMPTZ,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (task_id, minutes_before, method)
+);
+CREATE INDEX IF NOT EXISTS idx_task_reminders_task ON task_reminders(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_reminders_pending ON task_reminders(task_id) WHERE sent_at IS NULL;

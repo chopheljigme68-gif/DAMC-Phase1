@@ -18,6 +18,7 @@ const {
 } = require("../db");
 const { occurrencesAfter, horizonEnd, localDateStr } = require("./recurrence");
 const { broadcastTaskChange } = require("./notify");
+const { copyReminders } = require("./taskReminders");
 
 /**
  * Generates any missing occurrences for one series head.
@@ -47,7 +48,13 @@ async function generateForHead(head) {
   for (const due of missing) {
     // eslint-disable-next-line no-await-in-loop
     const task = await createRecurrenceOccurrence(head, due, subtasks);
-    if (task) created += 1;
+    if (task) {
+      created += 1;
+      // Each occurrence gets the head's reminders, so a weekly meeting
+      // reminds you every week, not just the first time.
+      // eslint-disable-next-line no-await-in-loop
+      await copyReminders(head.id, task.id);
+    }
   }
   if (created > 0) {
     broadcastTaskChange(head.workspaceId, { reason: "recurrence", projectId: head.projectId });

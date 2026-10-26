@@ -6,6 +6,7 @@ const http = require("http");
 const { initSocket } = require("./socket");
 const { startDueSoonScheduler } = require("./utils/reminders");
 const { startRecurrenceScheduler } = require("./utils/recurrenceRunner");
+const { startReminderScheduler } = require("./utils/taskReminders");
 
 const authRoutes = require("./routes/auth.routes");
 const usersRoutes = require("./routes/users.routes");
@@ -37,7 +38,7 @@ app.use(express.json());
 // of a long hunt for a 404 that turned out to be an older `node` process still
 // holding port 4000 from another terminal. Bump BUILD when shipping a change
 // whose absence would be confusing.
-const BUILD = "2026-09-24 reports";
+const BUILD = "2026-10-23 task-reminders";
 app.get("/api/health", (req, res) =>
   res.json({
     ok: true,
@@ -45,6 +46,8 @@ app.get("/api/health", (req, res) =>
     // The features a client can check for directly rather than guessing from
     // a 404.
     reports: true,
+    projectReports: true,
+    taskReminders: true,
     time: new Date().toISOString(),
   })
 );
@@ -90,6 +93,7 @@ server.listen(PORT, () => {
   console.log(`Team Flow Hub API + realtime server listening on http://localhost:${PORT}`);
   startDueSoonScheduler();
   startRecurrenceScheduler();
+  startReminderScheduler();
   warnIfAppUrlMisconfigured();
 });
 

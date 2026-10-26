@@ -166,6 +166,26 @@ async function gatherReportData({ workspaceId, userId = null, projectId = null, 
       )
     : { rows: [] };
 
+  // Milestones: the project's own key dates. The project report prints them;
+  // the team report ignores them.
+  const { rows: milestones } = projectIds.length
+    ? await pool.query(
+        `SELECT m.id, m.project_id AS "projectId", m.title, m.description,
+                to_char(m.target_date, 'YYYY-MM-DD') AS "targetDate"
+         FROM project_milestones m WHERE m.project_id = ANY($1)
+         ORDER BY m.target_date ASC NULLS LAST, m.position ASC`,
+        [projectIds]
+      )
+    : { rows: [] };
+  const milestoneIds = milestones.map((m) => m.id);
+  const { rows: milestoneLinks } = milestoneIds.length
+    ? await pool.query(
+        `SELECT milestone_id AS "milestoneId", label, url FROM milestone_links
+         WHERE milestone_id = ANY($1) ORDER BY position ASC, created_at ASC`,
+        [milestoneIds]
+      )
+    : { rows: [] };
+
   return {
     workspace,
     members,
@@ -174,6 +194,7 @@ async function gatherReportData({ workspaceId, userId = null, projectId = null, 
     activityLogs: activityLogs.map((l) => ({ ...l, comments: logComMap.get(l.id) || [] })),
     documents,
     projectLinks,
+    milestones: milestones.map((m) => ({ ...m, links: milestoneLinks.filter((l) => l.milestoneId === m.id) })),
     scope: { userId, projectId, from, to },
   };
 }

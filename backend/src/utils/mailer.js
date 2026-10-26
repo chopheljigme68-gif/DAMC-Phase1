@@ -179,4 +179,22 @@ async function sendInviteEmail({ to, workspaceName, invitedByName, appUrl }) {
   });
 }
 
-module.exports = { sendPasswordResetEmail, sendAddedToWorkspaceEmail, sendInviteEmail };
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// A task reminder chosen as "Email" (see utils/taskReminders.js). Returns
+// whether it actually left the building: with no mail provider configured
+// the caller falls back to an in-app reminder, so it is never just lost in
+// the server log.
+async function sendTaskReminderEmail({ to, name, message, title }) {
+  if (getMode() === "console") return false;
+  const appUrl = (process.env.APP_URL || "").replace(/\/$/, "");
+  await send({
+    to,
+    subject: message.replace(/^Reminder: /, "Reminder — "),
+    text: `Hello ${name || ""},\n\n${message}\n\nOpen PMDAMC: ${appUrl || "(your PMDAMC link)"}`,
+    html: wrapHtml(`Reminder: ${escapeHtml(title)}`, escapeHtml(message), appUrl || null, "Open PMDAMC"),
+  });
+  return true;
+}
+
+module.exports = { sendPasswordResetEmail, sendAddedToWorkspaceEmail, sendInviteEmail, sendTaskReminderEmail };

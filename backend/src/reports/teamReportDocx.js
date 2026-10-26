@@ -35,12 +35,31 @@ const fmtLongDate = (iso) => {
   const [y, m, d] = String(iso).slice(0, 10).split("-");
   return `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`;
 };
-const fmtTimestamp = (value) => {
-  if (!value) return "—";
+// Instants (created, completed, commented) are printed in BHUTAN time, not
+// the server's. The server runs on UTC (Render does), so reading the clock
+// with getHours() printed 08:00 meetings as 02:00, and anything finished
+// between midnight and 6 AM landed on the previous day — which also made the
+// "on time / late" count wrong. REPORT_TZ overrides it for another office.
+const REPORT_TZ = process.env.REPORT_TZ || "Asia/Thimphu";
+const zoneParts = (value) => {
   const dt = new Date(value);
-  const hh = String(dt.getHours()).padStart(2, "0");
-  const mm = String(dt.getMinutes()).padStart(2, "0");
-  return `${String(dt.getDate()).padStart(2, "0")}/${String(dt.getMonth() + 1).padStart(2, "0")}/${dt.getFullYear()} ${hh}:${mm}`;
+  if (Number.isNaN(dt.getTime())) return null;
+  const parts = {};
+  for (const { type, value: v } of new Intl.DateTimeFormat("en-GB", {
+    timeZone: REPORT_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(dt)) parts[type] = v;
+  return parts;
+};
+// The calendar date an instant fell on, in office time: 'YYYY-MM-DD'.
+const localDateOf = (value) => {
+  const p = value ? zoneParts(value) : null;
+  return p ? `${p.year}-${p.month}-${p.day}` : null;
+};
+const fmtTimestamp = (value) => {
+  const p = value ? zoneParts(value) : null;
+  if (!p) return "—";
+  return `${p.day}/${p.month}/${p.year} ${p.hour}:${p.minute}`;
 };
 // Times arrive from two places: a TIME column (always "HH:MM") and the free
 // JSON of an activity-log block, which has held numbers and junk. A report
@@ -69,7 +88,9 @@ const fmtSize = (bytes) => {
 const STATUS_LABEL = { todo: "To do", doing: "In progress", review: "In review", done: "Completed" };
 const PRIORITY_LABEL = { low: "Low", medium: "Medium", high: "Urgent" };
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
+// "Today" in office time too — at 3 AM in Thimphu the UTC date is still
+// yesterday, which would make everything due today look one day less late.
+const todayIso = () => localDateOf(new Date());
 const isOverdue = (task) => task.status !== "done" && task.due && task.due < todayIso();
 
 // Calendar-day arithmetic on 'YYYY-MM-DD' strings via UTC noon — the same
@@ -102,7 +123,7 @@ const overdueLabel = (task) => {
 // Answers "what was done" with the part people actually ask about next.
 const completionTiming = (task) => {
   if (task.status !== "done") return null;
-  const doneOn = task.completedAt ? new Date(task.completedAt).toISOString().slice(0, 10) : null;
+  const doneOn = task.completedAt ? localDateOf(task.completedAt) : null;
   if (!doneOn || !task.due) return { doneOn, label: "—", late: null };
   const diff = daysBetween(task.due, doneOn);
   if (diff === null) return { doneOn, label: "—", late: null };
@@ -906,4 +927,17 @@ function reportFileName(data) {
   return `DAMC-Report_${slug(who)}_${slug(what)}_${todayIso()}.docx`;
 }
 
-module.exports = { buildTeamReportDocx, reportFileName };
+// The project report (projectReportDocx.js) is built from these same pieces,
+// so the two documents look and count identically. One definition of "late",
+// one way to print an activity.
+module.exports = {
+  buildTeamReportDocx, reportFileName,
+  shared: {
+    LOGO_PATH, BRAND, INK, MUTED, LINE, DONE, OVERDUE, PARTIAL,
+    STATUS_LABEL, PRIORITY_LABEL,
+    fmtDate, fmtLongDate, fmtTimestamp, localDateOf, fmtClock, fmtTimeRange, fmtSize,
+    todayIso, isOverdue, overdueDays, completionTiming, plural, isTheirs,
+    text, spacer, para, heading, cell, cellText, table, kv, th, guard,
+    activityBlock,
+  },
+};
