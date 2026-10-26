@@ -1,9 +1,10 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
-const { getUserById, updateUserAvatar, getUserAvatar, updateUserProfile, updateUserAppearance } = require("../db");
+const { getUserById, updateUserAvatar, getUserAvatar, updateUserProfile, updateUserAppearance, updateUserPassword } = require("../db");
+const bcrypt = require("bcryptjs");
 const { getIO } = require("../socket");
-const { authenticate } = require("../auth");
+const { authenticate, signToken } = require("../auth");
 const { avatarUpload } = require("../utils/upload");
 const { formatName } = require("../utils/names");
 
@@ -50,6 +51,24 @@ router.get("/:userId/avatar", authenticate, async (req, res, next) => {
     // not 404. A 404 here made the browser log a red console error for every
     // avatar on the page, which buried real errors.
     return res.status(204).end();
+  } catch (err) { next(err); }
+});
+
+// Change your own password. Needs the current one. Every other session of
+// this account is signed out (password_changed_at), so a fresh token for THIS
+// session comes back with the response.
+router.post("/me/password", authenticate, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!bcrypt.compareSync(currentPassword || "", req.user.passwordHash)) {
+      return res.status(400).json({ error: "Your current password isn't right" });
+    }
+    if (!newPassword || String(newPassword).length < 8) return res.status(400).json({ error: "The new password must be at least 8 characters" });
+    if (newPassword === currentPassword) return res.status(400).json({ error: "Choose a password different from the current one" });
+    await updateUserPassword(req.user.id, bcrypt.hashSync(String(newPassword), 10));
+    const user = await getUserById(req.user.id);
+    const token = signToken(user);
+    res.json({ token, user: publicUser(user) });
   } catch (err) { next(err); }
 });
 

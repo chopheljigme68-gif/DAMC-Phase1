@@ -1,6 +1,7 @@
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
-const { getWorkspacesForUser } = require("./db");
+const { getWorkspacesForUser, getUserById, getMembership } = require("./db");
+const { isStale } = require("./auth");
 
 let io = null;
 
@@ -14,8 +15,14 @@ function initSocket(httpServer, corsOrigin) {
       const token = socket.handshake.auth?.token;
       if (!token) return next(new Error("unauthorized"));
       const payload = jwt.verify(token, process.env.JWT_SECRET);
-      socket.data.userId = payload.id;
-      next();
+      // Same checks as the REST API: the account must still exist, and a
+      // token from before the last password change is refused.
+      getUserById(payload.id).then((user) => {
+        if (!user || isStale(payload, user)) return next(new Error("unauthorized"));
+        socket.data.userId = user.id;
+        socket.data.isSuperAdmin = Boolean(user.isPlatformAdmin);
+        next();
+      }).catch(() => next(new Error("unauthorized")));
     } catch (err) {
       next(new Error("unauthorized"));
     }
@@ -27,7 +34,7 @@ function initSocket(httpServer, corsOrigin) {
     // Join a room per workspace this user actually belongs to — this is
     // what keeps realtime events from leaking across projects.
     try {
-      const workspaces = await getWorkspacesForUser(socket.data.userId);
+      const workspaces = await getWorkspacesForUser(socket.data.userId, { includeAll: socket.data.isSuperAdmin });
       workspaces.forEach((w) => socket.join(`workspace:${w.id}`));
     } catch (err) {
       console.error("Failed to join workspace rooms for socket", err);
@@ -35,8 +42,15 @@ function initSocket(httpServer, corsOrigin) {
 
     // Called by the client after creating/joining a new workspace mid-session
     // so the socket starts receiving realtime events for it immediately.
-    socket.on("workspace:join", (workspaceId) => {
-      if (typeof workspaceId === "string") socket.join(`workspace:${workspaceId}`);
+    // Verified: this used to join ANY room it was asked for, so anyone signed
+    // in could listen to another workspace's live updates by sending its id.
+    socket.on("workspace:join", async (workspaceId) => {
+      if (typeof workspaceId !== "string") return;
+      try {
+        if (socket.data.isSuperAdmin || (await getMembership(workspaceId, socket.data.userId))) {
+          socket.join(`workspace:${workspaceId}`);
+        }
+      } catch { /* not joined */ }
     });
 
     socket.on("disconnect", () => {

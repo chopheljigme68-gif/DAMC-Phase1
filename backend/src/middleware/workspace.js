@@ -1,4 +1,4 @@
-const { getMembership, getProjectById } = require("../db");
+const { getMembership, getProjectById, getWorkspaceById } = require("../db");
 
 /**
  * Requires req.user (set by `authenticate`) to be a member of the workspace
@@ -8,7 +8,14 @@ const { getMembership, getProjectById } = require("../db");
 async function requireWorkspaceMember(req, res, next) {
   try {
     const workspaceId = req.params.workspaceId;
-    const membership = await getMembership(workspaceId, req.user.id);
+    let membership = await getMembership(workspaceId, req.user.id);
+    // A Super Admin can act in ANY workspace as its admin, without being
+    // added to it (so they don't appear in its member list, rosters or
+    // reports). The workspace must still exist.
+    if (!membership && req.user.isPlatformAdmin) {
+      if (!(await getWorkspaceById(workspaceId))) return res.status(404).json({ error: "Workspace not found" });
+      membership = { workspaceId, userId: req.user.id, role: "admin", superAdmin: true };
+    }
     if (!membership) return res.status(403).json({ error: "You are not a member of this workspace" });
     req.membership = membership;
     next();
@@ -58,7 +65,7 @@ async function requireProjectInWorkspace(req, res, next) {
  */
 function requirePlatformAdmin(req, res, next) {
   if (!req.user.isPlatformAdmin) {
-    return res.status(403).json({ error: "Only a platform admin can do this. Ask whoever set up your system to grant you access." });
+    return res.status(403).json({ error: "Only a Super Admin can do this. Ask whoever set up your system to grant you access." });
   }
   next();
 }

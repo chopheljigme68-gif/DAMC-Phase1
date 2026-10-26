@@ -384,8 +384,7 @@ html.tfh-appearance-changing *::after {
 .tfh-pulse { animation: tfhPulse 1.6s ease-in-out infinite; }
 @keyframes tfhPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
-.tfh-dashboard-columns { display: flex; gap: 22px; align-items: flex-start; }
-
+.tfh-dashboard-columns { display: flex; gap: 22px; align-items: flex-start; }
 
 /* The time/date gutter on an agenda row. A fixed width plus right alignment
    is what makes the titles line up: "9:00 AM" and "11:00 AM – 12:00 PM" are
@@ -796,4 +795,49 @@ html.tfh-appearance-changing *::after {
   border-radius: 8px; background: var(--raised);
   font-size: 11px; color: var(--text-dim); line-height: 1.4;
   animation: tfhExpandIn 0.2s ease;
+}
+
+/* ---------- Task reminders (Google Calendar style rows) ---------- */
+.tfh-reminder-row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.tfh-reminder-row .tfh-input { padding-top: 6px; padding-bottom: 6px; }
+/* The "fires at" preview always sits on its own line under the controls, so
+   the row itself never wraps and its remove button stays on the same line. */
+.tfh-reminder-row { padding: 4px 0 6px; border-bottom: 1px dashed var(--line); }
+.tfh-reminder-row:last-child { border-bottom: none; }
+.tfh-reminder-when { order: 10; flex-basis: 100%; font-size: 11.5px; padding-left: 2px; }
+
+/* ---------- Super Admin page ---------- */
+.tfh-onetime {
+  padding: 14px 16px; border-radius: 12px;
+  background: var(--accent-soft); border: 1px solid var(--accent);
+}
+.tfh-sa-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.tfh-sa-table { display: flex; flex-direction: column; }
+.tfh-sa-row {
+  display: grid; grid-template-columns: minmax(160px, 2fr) 0.7fr 0.7fr 0.8fr 1.2fr 0.6fr;
+  gap: 10px; align-items: center; padding: 9px 4px; font-size: 13px;
+  border-top: 1px solid var(--line);
+}
+.tfh-sa-head { border-top: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-faint); }
+.tfh-sa-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 14px; }
+.tfh-sa-user {
+  display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap;
+  padding: 12px 4px; border-top: 1px solid var(--line);
+}
+.tfh-sa-user:first-child { border-top: none; }
+.tfh-sa-membership {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 4px 2px 8px; border-radius: 999px;
+  background: var(--raised); font-size: 11.5px; color: var(--text-dim);
+}
+.tfh-sa-membership select, .tfh-sa-add {
+  background: transparent; border: none; color: var(--text); font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.tfh-sa-add { padding: 2px 8px; border: 1px dashed var(--line); border-radius: 999px; color: var(--accent); }
+@media (max-width: 760px) {
+  .tfh-sa-row { grid-template-columns: 1fr 1fr; }
+  .tfh-sa-head { display: none; }
+  .tfh-sa-form, .tfh-sa-stats { grid-template-columns: 1fr; }
 }

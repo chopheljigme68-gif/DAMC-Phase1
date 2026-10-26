@@ -9,7 +9,7 @@ const USER_COLUMNS = `id, name, email, password_hash AS "passwordHash", color, i
   is_platform_admin AS "isPlatformAdmin", avatar_path AS "avatarPath", avatar_mime AS "avatarMime",
   (avatar_data IS NOT NULL OR avatar_path IS NOT NULL) AS "hasAvatar",
   theme_preference AS "themePreference", accent_color AS "accentColor", accent_tint AS "accentTint",
-  default_title AS "defaultTitle", created_at AS "createdAt"`;
+  default_title AS "defaultTitle", created_at AS "createdAt", password_changed_at AS "passwordChangedAt"`;
 
 async function getUserById(id) {
   const { rows } = await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [id]);
@@ -35,8 +35,10 @@ async function createUser({ name, email, passwordHash, defaultTitle }) {
   return rows[0];
 }
 
+// Stamps password_changed_at too: every session token issued before this
+// moment is refused from now on (see auth.js).
 async function updateUserPassword(userId, passwordHash) {
-  await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, userId]);
+  await pool.query("UPDATE users SET password_hash = $1, password_changed_at = now() WHERE id = $2", [passwordHash, userId]);
 }
 
 // Self-healing bootstrap: if this user's email is in PLATFORM_ADMIN_EMAILS,
@@ -118,20 +120,58 @@ async function consumePasswordReset(id) {
 const slugify = (name) =>
   name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40);
 
-async function getWorkspacesForUser(userId) {
+// includeAll: a Super Admin sees EVERY workspace. Where they aren't a member
+// the row says so (superAdminAccess: true) and they act in it as an admin —
+// see requireWorkspaceMember.
+async function getWorkspacesForUser(userId, { includeAll = false } = {}) {
   const { rows } = await pool.query(
     `SELECT w.id, w.name, w.slug, w.created_at AS "createdAt",
-            wm.title, wm.role,
+            wm.title, COALESCE(wm.role, 'admin') AS role,
+            (wm.user_id IS NULL) AS "superAdminAccess",
             (SELECT count(*)::int FROM workspace_members m2 WHERE m2.workspace_id = w.id) AS "memberCount",
             (SELECT count(*)::int FROM tasks t WHERE t.workspace_id = w.id) AS "taskCount",
             (SELECT count(*)::int FROM projects p WHERE p.workspace_id = w.id) AS "projectCount"
      FROM workspaces w
-     JOIN workspace_members wm ON wm.workspace_id = w.id
-     WHERE wm.user_id = $1
+     LEFT JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = $1
+     WHERE wm.user_id IS NOT NULL OR $2::boolean
      ORDER BY w.created_at ASC`,
-    [userId]
+    [userId, includeAll]
   );
   return rows;
+}
+
+/* ---------------- super admin ---------------- */
+
+// Every account, with the workspaces each belongs to. Never selects
+// password hashes or avatar bytes.
+async function getAllUsersWithMemberships() {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.name, u.email, u.color, u.initials, u.is_platform_admin AS "isSuperAdmin",
+            u.created_at AS "createdAt",
+            CASE WHEN u.avatar_data IS NOT NULL OR u.avatar_path IS NOT NULL THEN '/api/users/' || u.id || '/avatar' ELSE NULL END AS "avatarUrl",
+            COALESCE(json_agg(json_build_object('workspaceId', w.id, 'workspaceName', w.name, 'role', wm.role)
+                     ORDER BY w.created_at) FILTER (WHERE w.id IS NOT NULL), '[]') AS memberships
+     FROM users u
+     LEFT JOIN workspace_members wm ON wm.user_id = u.id
+     LEFT JOIN workspaces w ON w.id = wm.workspace_id
+     GROUP BY u.id
+     ORDER BY u.is_platform_admin DESC, lower(u.name) ASC`
+  );
+  return rows;
+}
+
+async function countSuperAdmins() {
+  const { rows } = await pool.query("SELECT count(*)::int AS n FROM users WHERE is_platform_admin = true");
+  return rows[0].n;
+}
+
+async function setSuperAdmin(userId, value) {
+  await pool.query("UPDATE users SET is_platform_admin = $2 WHERE id = $1", [userId, !!value]);
+}
+
+async function setWorkspaceMemberRole(workspaceId, userId, role) {
+  // Same one-lead rule as the Team page.
+  return setMemberRole(workspaceId, userId, role);
 }
 
 async function getWorkspaceById(id) {
@@ -1582,6 +1622,7 @@ module.exports = {
   pingDb,
   createPasswordReset, getValidPasswordReset, consumePasswordReset,
   getWorkspacesForUser, getWorkspaceById, createWorkspace, renameWorkspace,
+  getAllUsersWithMemberships, countSuperAdmins, setSuperAdmin, setWorkspaceMemberRole,
   getMembership, getWorkspaceMembers, countAdmins, addWorkspaceMember, setMemberRole, updateMemberTitle, removeMember,
   getWorkspaceWorkload,
   createInvite, getPendingInvitesForEmail, acceptInvite,

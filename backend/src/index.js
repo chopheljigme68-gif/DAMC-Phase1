@@ -38,7 +38,7 @@ app.use(express.json());
 // of a long hunt for a 404 that turned out to be an older `node` process still
 // holding port 4000 from another terminal. Bump BUILD when shipping a change
 // whose absence would be confusing.
-const BUILD = "2026-10-23 task-reminders";
+const BUILD = "2026-10-26 super-admin";
 app.get("/api/health", (req, res) =>
   res.json({
     ok: true,
@@ -48,6 +48,7 @@ app.get("/api/health", (req, res) =>
     reports: true,
     projectReports: true,
     taskReminders: true,
+    superAdmin: true,
     time: new Date().toISOString(),
   })
 );
@@ -61,6 +62,7 @@ app.use("/api/workspaces/:workspaceId/projects/:projectId/analytics", analyticsR
 app.use("/api/workspaces/:workspaceId/activity-log", activityRoutes);
 app.use("/api/workspaces/:workspaceId/reports", reportsRoutes);
 app.use("/api/notifications", notificationsRoutes);
+app.use("/api/superadmin", require("./routes/superadmin.routes"));
 
 app.use((err, req, res, next) => {
   // Malformed JSON in the request body (express.json() throws this before

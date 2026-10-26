@@ -1,20 +1,19 @@
 const express = require("express");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
 const {
   getUserByEmail, createUser, getUserById, updateUserPassword, ensurePlatformAdminFromEnv,
   createPasswordReset, getValidPasswordReset, consumePasswordReset,
   getPendingInvitesForEmail, acceptInvite,
 } = require("../db");
-const { authenticate } = require("../auth");
+const { authenticate, signToken } = require("../auth");
 const { sendPasswordResetEmail } = require("../utils/mailer");
 const { formatName } = require("../utils/names");
 
 const router = express.Router();
 
 const { publicUser } = require("../utils/publicUser");
-const sign = (user) => jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "30d" });
+const sign = signToken;
 const hashToken = (token) => crypto.createHash("sha256").update(token).digest("hex");
 
 router.post("/register", async (req, res, next) => {

@@ -733,3 +733,10 @@ CREATE TABLE IF NOT EXISTS task_reminders (
 );
 CREATE INDEX IF NOT EXISTS idx_task_reminders_task ON task_reminders(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_reminders_pending ON task_reminders(task_id) WHERE sent_at IS NULL;
+
+/* ---------------- super admin: password change invalidates old sessions ---------------- */
+-- When a password changes (the user's own reset, or a Super Admin resetting
+-- it), every token issued before that moment stops working. Without this, a
+-- JWT is valid for 30 days whatever happens, so "I reset their password" did
+-- not actually lock out whoever had the old one.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ;

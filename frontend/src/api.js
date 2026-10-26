@@ -93,6 +93,21 @@ export const api = {
   getMembers: (workspaceId) => request(`/workspaces/${workspaceId}/members`),
   inviteToWorkspace: (workspaceId, email) => request(`/workspaces/${workspaceId}/invite`, { method: "POST", body: { email } }),
   setMemberRole: (workspaceId, userId, role) => request(`/workspaces/${workspaceId}/members/${userId}/role`, { method: "PATCH", body: { role } }),
+  // Your own password. The server signs out every other session and returns
+  // a fresh token for this one, which is stored here.
+  changePassword: async (currentPassword, newPassword) => {
+    const res = await request("/users/me/password", { method: "POST", body: { currentPassword, newPassword } });
+    if (res?.token) localStorage.setItem("tfh_token", res.token);
+    return res;
+  },
+
+  // Super Admin (system-wide administrator).
+  superAdminOverview: () => request("/superadmin/overview"),
+  superAdminCreateUser: (payload) => request("/superadmin/users", { method: "POST", body: payload }),
+  superAdminResetPassword: (userId) => request(`/superadmin/users/${userId}/reset-password`, { method: "POST" }),
+  superAdminSetSuperAdmin: (userId, superAdmin) => request(`/superadmin/users/${userId}/super-admin`, { method: "PATCH", body: { superAdmin } }),
+  superAdminSetMembership: (workspaceId, userId, role) => request(`/superadmin/workspaces/${workspaceId}/members/${userId}`, { method: "PUT", body: { role } }),
+
   setMemberTitle: (workspaceId, userId, title) => request(`/workspaces/${workspaceId}/members/${userId}/title`, { method: "PATCH", body: { title } }),
   removeMember: (workspaceId, userId) => request(`/workspaces/${workspaceId}/members/${userId}`, { method: "DELETE" }),
   getWorkload: (workspaceId) => request(`/workspaces/${workspaceId}/workload`),

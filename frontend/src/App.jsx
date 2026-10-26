@@ -5,7 +5,7 @@ import {
   Flag, ChevronLeft, ChevronRight, Trash2, Menu,
   Bell, BadgeCheck, Sun, Moon, LogOut, AlertTriangle, Loader2, RefreshCw,
   UserPlus, ChevronDown, ChevronUp, Building2, Shield, FolderKanban, Lock,
-  FolderCheck, ArchiveRestore,
+  FolderCheck, ArchiveRestore, Crown, KeyRound,
   Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, NotebookPen, Table as TableIcon, CheckCircle2, UserX, Repeat, CalendarRange, Monitor, Sunset,
 } from "lucide-react";
 import {
@@ -68,6 +68,8 @@ const NAV = [
   { id: "team", label: "Team", icon: Users },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
   { id: "admin", label: "Admin Panel", icon: Shield },
+  // Shown only to a Super Admin (see visibleNav).
+  { id: "superadmin", label: "Super Admin", icon: Crown },
 ];
 // The nav items grouped under DASHBOARD at the top of the sidebar, above the
 // project list. They render in NAV order: Dashboard, (Initiate
@@ -2665,9 +2667,10 @@ const AccountMenu = ({ member, authUser, onEditProfile, onSignOut }) => {
             </div>
           </div>
 
-          {member?.role && (
-            <div style={{ padding: "10px 14px 0" }}>
-              <RoleBadge role={member.role} />
+          {(member?.role || authUser?.isPlatformAdmin) && (
+            <div style={{ padding: "10px 14px 0", display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {authUser?.isPlatformAdmin && <span className="tfh-chip" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}><Crown size={10} /> Super Admin</span>}
+              {member?.role && !member.superAdminAccess && <RoleBadge role={member.role} />}
             </div>
           )}
 
@@ -6686,7 +6689,9 @@ const WorkspaceSwitcher = () => {
               >
                 <Building2 size={13} color={w.id === current?.id ? "var(--accent)" : "var(--text-faint)"} />
                 <span style={{ flex: 1, fontSize: 12.5, fontWeight: w.id === current?.id ? 600 : 500 }}>{w.name}</span>
-                {w.role === "admin" && <Shield size={11} color="var(--stage-done)" />}
+                {w.superAdminAccess
+                  ? <Crown size={11} color="var(--accent)" aria-label="Super Admin access" />
+                  : w.role === "admin" && <Shield size={11} color="var(--stage-done)" />}
                 {w.role === "lead" && <BadgeCheck size={11} color="var(--accent)" />}
               </button>
             ))}
@@ -7259,6 +7264,314 @@ const CreateProjectScreen = ({ canManage, onCreate, workspaceName, logout }) => 
   );
 };
 
+/* ------------------------------------------------------------------ */
+/* Super Admin — the whole system: every workspace, every account        */
+/* ------------------------------------------------------------------ */
+
+// A password the server made up, shown exactly once with a copy button.
+const OneTimePassword = ({ email, password, onDone }) => {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(`Email: ${email}\nPassword: ${password}`); setCopied(true); } catch { setCopied(false); }
+  };
+  return (
+    <div className="tfh-onetime" role="status">
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Give these sign-in details to the person — the password is shown only now</div>
+      <div className="tfh-mono" style={{ fontSize: 13, lineHeight: 1.7 }}>
+        <div>Email: <strong>{email}</strong></div>
+        <div>Password: <strong style={{ letterSpacing: 0.5 }}>{password}</strong></div>
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-dim)", margin: "6px 0 10px" }}>
+        They should change it after signing in (their name, top right → Edit profile → Change password).
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" className="tfh-btn" onClick={copy}>{copied ? <><Check size={13} /> Copied</> : "Copy details"}</button>
+        <button type="button" className="tfh-btn tfh-btn-ghost" onClick={onDone}>Done</button>
+      </div>
+    </div>
+  );
+};
+
+const SuperAdminView = ({ currentUserId, onOpenWorkspace }) => {
+  const { refresh: refreshWorkspaces, create: createWorkspace } = useWorkspace();
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(null); // id of the row an action is running on
+  const [notice, setNotice] = useState(null); // { email, password } or { text }
+  const [rowError, setRowError] = useState({});
+
+  const load = useCallback(async () => {
+    try { setData(await api.superAdminOverview()); setError(""); }
+    catch (err) { setError(err.message || "Couldn't load the system overview."); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  // ---- new account form ----
+  const [form, setForm] = useState({ name: "", email: "", workspaceId: "", role: "member", password: "", superAdmin: false });
+  const [formBusy, setFormBusy] = useState(false);
+  const [formError, setFormError] = useState("");
+  const setF = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+  const createAccount = async (e) => {
+    e.preventDefault();
+    setFormBusy(true); setFormError("");
+    try {
+      const res = await api.superAdminCreateUser({
+        name: form.name, email: form.email.trim(),
+        password: form.password || undefined,
+        workspaceId: form.workspaceId || undefined, role: form.workspaceId ? form.role : undefined,
+        superAdmin: form.superAdmin,
+      });
+      setNotice(res.temporaryPassword
+        ? { email: res.user.email, password: res.temporaryPassword }
+        : { text: `Account created for ${res.user.email} with the password you set.` });
+      setForm({ name: "", email: "", workspaceId: form.workspaceId, role: "member", password: "", superAdmin: false });
+      await load();
+    } catch (err) { setFormError(err.message); }
+    finally { setFormBusy(false); }
+  };
+
+  // ---- new workspace ----
+  const [wsName, setWsName] = useState("");
+  const [wsBusy, setWsBusy] = useState(false);
+  const [wsError, setWsError] = useState("");
+  const addWorkspace = async (e) => {
+    e.preventDefault();
+    if (!wsName.trim()) return;
+    setWsBusy(true); setWsError("");
+    try { await createWorkspace(wsName.trim()); setWsName(""); await load(); }
+    catch (err) { setWsError(err.message); }
+    finally { setWsBusy(false); }
+  };
+
+  const act = async (rowId, fn) => {
+    setBusy(rowId); setRowError((m) => ({ ...m, [rowId]: "" }));
+    try { await fn(); await load(); }
+    catch (err) { setRowError((m) => ({ ...m, [rowId]: err.message })); }
+    finally { setBusy(null); }
+  };
+
+  if (error) return <div className="tfh-card" style={{ padding: 20, color: "var(--pri-high)", fontSize: 13 }}>{error}</div>;
+  if (!data) return <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 30, justifyContent: "center" }}><Spinner /> <span style={{ fontSize: 13, color: "var(--text-dim)" }}>Loading…</span></div>;
+
+  const needle = query.trim().toLowerCase();
+  const users = data.users.filter((u) => !needle || `${u.name} ${u.email}`.toLowerCase().includes(needle));
+  const superAdmins = data.users.filter((u) => u.isSuperAdmin).length;
+
+  return (
+    <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div>
+        <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4, display: "flex", alignItems: "center", gap: 10 }}>
+          <Crown size={22} color="var(--accent)" /> Super Admin
+        </div>
+        <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>
+          The whole system: every workspace and every account. You can open any workspace as its admin without being added to it.
+        </div>
+      </div>
+
+      {notice && (notice.password
+        ? <OneTimePassword email={notice.email} password={notice.password} onDone={() => setNotice(null)} />
+        : <div className="tfh-onetime" role="status" style={{ display: "flex", alignItems: "center", gap: 10 }}><Check size={15} color="var(--success)" /><span style={{ flex: 1, fontSize: 13 }}>{notice.text}</span><button className="tfh-btn tfh-btn-ghost" onClick={() => setNotice(null)}>Done</button></div>)}
+
+      <div className="tfh-sa-stats">
+        {[["Workspaces", data.workspaces.length], ["Accounts", data.users.length], ["Super Admins", superAdmins]].map(([label, n]) => (
+          <div key={label} className="tfh-card" style={{ padding: "14px 16px" }}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-faint)", fontWeight: 700 }}>{label}</div>
+            <div style={{ fontSize: 24, fontWeight: 700, marginTop: 2 }}>{n}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Workspaces */}
+      <div className="tfh-card" style={{ padding: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <Building2 size={15} color="var(--accent)" />
+          <span style={{ fontSize: 14, fontWeight: 700 }}>Workspaces</span>
+          <form onSubmit={addWorkspace} style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <input className="tfh-input" placeholder="New workspace name" value={wsName} onChange={(e) => setWsName(e.target.value)} style={{ fontSize: 12.5, width: 220 }} aria-label="New workspace name" />
+            <button className="tfh-btn tfh-btn-accent" disabled={wsBusy || !wsName.trim()}><Plus size={13} /> {wsBusy ? "Creating…" : "Create"}</button>
+          </form>
+        </div>
+        {wsError && <div style={{ fontSize: 12, color: "var(--pri-high)", marginBottom: 8 }}>{wsError}</div>}
+        <div className="tfh-sa-table" role="table" aria-label="Workspaces">
+          <div className="tfh-sa-row tfh-sa-head" role="row">
+            <span>Name</span><span>Members</span><span>Projects</span><span>Activities</span><span>Your access</span><span />
+          </div>
+          {data.workspaces.map((w) => (
+            <div key={w.id} className="tfh-sa-row" role="row">
+              <span style={{ fontWeight: 600 }}>{w.name}</span>
+              <span>{w.memberCount}</span>
+              <span>{w.projectCount}</span>
+              <span>{w.taskCount}</span>
+              <span>{w.superAdminAccess
+                ? <span className="tfh-chip" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}><Crown size={10} /> Super Admin</span>
+                : <span className="tfh-chip" style={{ background: "var(--raised)", color: "var(--text-dim)" }}>{ROLE_LABEL[w.role] || w.role}</span>}</span>
+              <span style={{ textAlign: "right" }}>
+                <button className="tfh-btn tfh-btn-ghost" style={{ fontSize: 12 }} onClick={() => onOpenWorkspace(w.id)}>Open</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* New account */}
+      <form onSubmit={createAccount} className="tfh-card" style={{ padding: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <UserPlus size={15} color="var(--accent)" />
+          <span style={{ fontSize: 14, fontWeight: 700 }}>Create an account</span>
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 12 }}>
+          For staff who can't use an email invite. Leave the password empty and a strong one is made for you and shown once.
+        </div>
+        <div className="tfh-sa-form">
+          <div><label className="tfh-label" htmlFor="sa-name">Full name</label><input id="sa-name" className="tfh-input" value={form.name} onChange={setF("name")} required /></div>
+          <div><label className="tfh-label" htmlFor="sa-email">Email</label><input id="sa-email" type="email" className="tfh-input" value={form.email} onChange={setF("email")} required /></div>
+          <div>
+            <label className="tfh-label" htmlFor="sa-ws">Add to workspace</label>
+            <select id="sa-ws" className="tfh-input" value={form.workspaceId} onChange={setF("workspaceId")}>
+              <option value="">— not yet —</option>
+              {data.workspaces.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="tfh-label" htmlFor="sa-role">Role there</label>
+            <select id="sa-role" className="tfh-input" value={form.role} onChange={setF("role")} disabled={!form.workspaceId}>
+              <option value="member">Member</option><option value="lead">Lead</option><option value="admin">Admin</option>
+            </select>
+          </div>
+          <div>
+            <label className="tfh-label" htmlFor="sa-pw">Password <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(optional, 8+)</span></label>
+            <input id="sa-pw" type="text" autoComplete="new-password" className="tfh-input" value={form.password} onChange={setF("password")} placeholder="Generate one for me" />
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: "var(--text-dim)", alignSelf: "end", paddingBottom: 9, cursor: "pointer" }}>
+            <input type="checkbox" checked={form.superAdmin} onChange={setF("superAdmin")} /> Make Super Admin
+          </label>
+        </div>
+        {formError && <div role="alert" style={{ fontSize: 12, color: "var(--pri-high)", marginTop: 10 }}>{formError}</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="tfh-btn tfh-btn-accent" disabled={formBusy || !form.name.trim() || !form.email.trim()}><UserPlus size={13} /> {formBusy ? "Creating…" : "Create account"}</button>
+        </div>
+      </form>
+
+      {/* Accounts */}
+      <div className="tfh-card" style={{ padding: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <Users size={15} color="var(--accent)" />
+          <span style={{ fontSize: 14, fontWeight: 700 }}>Accounts</span>
+          <div className="tfh-project-search" style={{ marginLeft: "auto", width: 240, margin: "0 0 0 auto" }}>
+            <Search size={12} color="var(--text-faint)" />
+            <input className="tfh-project-search-input" placeholder="Search name or email…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search accounts" />
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {users.map((u) => {
+            const isMe = u.id === currentUserId;
+            const notIn = data.workspaces.filter((w) => !u.memberships.some((m) => m.workspaceId === w.id));
+            return (
+              <div key={u.id} className="tfh-sa-user">
+                <Avatar member={u} size={30} />
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13.5, fontWeight: 600 }}>{u.name}</span>
+                    {isMe && <span style={{ fontSize: 11, color: "var(--text-faint)" }}>(you)</span>}
+                    {u.isSuperAdmin && <span className="tfh-chip" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}><Crown size={10} /> Super Admin</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-faint)" }}>{u.email}</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                    {u.memberships.map((m) => (
+                      <span key={m.workspaceId} className="tfh-sa-membership">
+                        <Building2 size={10} /> {m.workspaceName}
+                        <select
+                          value={m.role} disabled={busy === u.id}
+                          onChange={(e) => act(u.id, () => api.superAdminSetMembership(m.workspaceId, u.id, e.target.value))}
+                          aria-label={`${u.name}'s role in ${m.workspaceName}`}
+                        >
+                          <option value="member">Member</option><option value="lead">Lead</option><option value="admin">Admin</option>
+                        </select>
+                      </span>
+                    ))}
+                    {u.memberships.length === 0 && <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Not in any workspace</span>}
+                    {notIn.length > 0 && (
+                      <select
+                        className="tfh-sa-add" value="" disabled={busy === u.id}
+                        onChange={(e) => e.target.value && act(u.id, () => api.superAdminSetMembership(e.target.value, u.id, "member"))}
+                        aria-label={`Add ${u.name} to a workspace`}
+                      >
+                        <option value="">+ Add to workspace…</option>
+                        {notIn.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                      </select>
+                    )}
+                  </div>
+                  {rowError[u.id] && <div style={{ fontSize: 11.5, color: "var(--pri-high)", marginTop: 6 }}>{rowError[u.id]}</div>}
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {!isMe && (
+                    <button
+                      className="tfh-btn" style={{ fontSize: 12 }} disabled={busy === u.id}
+                      onClick={() => act(u.id, async () => { const r = await api.superAdminResetPassword(u.id); setNotice({ email: r.email, password: r.temporaryPassword }); })}
+                      title="Make a new password for this person and sign out their sessions"
+                    >
+                      <Lock size={12} /> Reset password
+                    </button>
+                  )}
+                  <button
+                    className="tfh-btn tfh-btn-ghost" style={{ fontSize: 12 }} disabled={busy === u.id || (u.isSuperAdmin && superAdmins <= 1)}
+                    onClick={() => act(u.id, async () => { await api.superAdminSetSuperAdmin(u.id, !u.isSuperAdmin); if (isMe) await refreshWorkspaces(); })}
+                    title={u.isSuperAdmin && superAdmins <= 1 ? "The system needs at least one Super Admin" : u.superAdminFromEnv ? "Set by PLATFORM_ADMIN_EMAILS on the server" : ""}
+                  >
+                    <Crown size={12} /> {u.isSuperAdmin ? "Remove Super Admin" : "Make Super Admin"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          {users.length === 0 && <div style={{ fontSize: 12.5, color: "var(--text-faint)", padding: 10 }}>No account matches “{query}”.</div>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Change your own password — inside Edit profile. Needs the current one; the
+// server signs out every other session and hands this one a fresh token.
+const ChangePasswordSection = () => {
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null); // { ok, text }
+
+  const submit = async () => {
+    if (next.length < 8) { setMsg({ ok: false, text: "The new password must be at least 8 characters." }); return; }
+    if (next !== confirm) { setMsg({ ok: false, text: "The two new passwords don't match." }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      await api.changePassword(current, next);
+      setCurrent(""); setNext(""); setConfirm("");
+      setMsg({ ok: true, text: "Password changed. You've been signed out everywhere else." });
+    } catch (err) { setMsg({ ok: false, text: err.message }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ borderTop: "1px solid var(--line)", paddingTop: 14, marginBottom: 14 }}>
+      <button type="button" onClick={() => setOpen((o) => !o)} className="tfh-btn tfh-btn-ghost" style={{ fontSize: 12.5, padding: "4px 6px" }} aria-expanded={open}>
+        <KeyRound size={13} /> Change password {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+      {open && (
+        <div className="tfh-expand-in" style={{ display: "grid", gap: 10, marginTop: 10 }}>
+          <div><label className="tfh-label" htmlFor="pw-current">Current password</label><input id="pw-current" type="password" autoComplete="current-password" className="tfh-input" value={current} onChange={(e) => setCurrent(e.target.value)} /></div>
+          <div><label className="tfh-label" htmlFor="pw-new">New password <span style={{ textTransform: "none", fontWeight: 400, color: "var(--text-faint)" }}>(8+ characters)</span></label><input id="pw-new" type="password" autoComplete="new-password" className="tfh-input" value={next} onChange={(e) => setNext(e.target.value)} /></div>
+          <div><label className="tfh-label" htmlFor="pw-confirm">New password again</label><input id="pw-confirm" type="password" autoComplete="new-password" className="tfh-input" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } }} /></div>
+          {msg && <div role="status" style={{ fontSize: 12, color: msg.ok ? "var(--success)" : "var(--pri-high)" }}>{msg.text}</div>}
+          <div><button type="button" className="tfh-btn" onClick={submit} disabled={busy || !current || !next || !confirm}>{busy ? "Changing…" : "Change password"}</button></div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const EditProfileModal = ({ member, currentUser, workspaceId, onClose, onProfileUpdated, onMembersUpdated }) => {
   const [name, setName] = useState(currentUser.name);
   const [title, setTitle] = useState(member?.title || "");
@@ -7342,6 +7655,8 @@ const EditProfileModal = ({ member, currentUser, workspaceId, onClose, onProfile
             </>
           )}
 
+          <ChangePasswordSection />
+
           {error && <div style={{ fontSize: 12.5, color: "var(--pri-high)", marginBottom: 14 }}>{error}</div>}
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
@@ -7359,7 +7674,7 @@ const EditProfileModal = ({ member, currentUser, workspaceId, onClose, onProfile
 /* ------------------------------------------------------------------ */
 function Workspace() {
   const { user, logout, setUser } = useAuth();
-  const { current, currentId, loading: workspaceLoading, refresh: refreshWorkspaces } = useWorkspace();
+  const { current, currentId, loading: workspaceLoading, refresh: refreshWorkspaces, switchTo: switchWorkspace } = useWorkspace();
   const { projects, current: currentProject, currentId: projectId, loading: projectsLoading, create: createProject, refresh: refreshProjects, switchTo: switchProject } = useProject();
 
   const [tasks, setTasks] = useState([]);
@@ -7430,7 +7745,12 @@ function Workspace() {
   const [saveError, setSaveError] = useState("");
   const [uploadPhase, setUploadPhase] = useState(false);
 
-  const currentUser = useMemo(() => users.find((u) => u.id === user.id) || { ...user, role: "member" }, [users, user]);
+  // A Super Admin opening a workspace they aren't a member of acts as its
+  // admin (the server grants the same) — they just aren't on its roster.
+  const currentUser = useMemo(
+    () => users.find((u) => u.id === user.id) || { ...user, role: current?.superAdminAccess ? "admin" : "member", superAdminAccess: Boolean(current?.superAdminAccess) },
+    [users, user, current?.superAdminAccess]
+  );
   const canManage = currentUser.role === "admin" || currentUser.role === "lead";
   const loadAll = async (workspaceId) => {
     setLoading(true);
@@ -7448,7 +7768,8 @@ function Workspace() {
   // If there's no project (or the current one disappears), only the
   // Dashboard, Board, and Team views make sense — everything else needs a
   // specific project. Board now works without one selected (workspace-wide).
-  useEffect(() => { if (!projectId && view !== "dashboard" && view !== "team" && view !== "activity" && view !== "board") setView("dashboard"); }, [projectId, view]);
+  useEffect(() => { if (!projectId && !["dashboard", "team", "activity", "board", "superadmin"].includes(view)) setView("dashboard"); }, [projectId, view]);
+  useEffect(() => { if (view === "superadmin" && !user.isPlatformAdmin) setView("dashboard"); }, [view, user.isPlatformAdmin]);
 
   // Realtime: socket listeners, scoped to the workspace currently being viewed
   useEffect(() => {
@@ -7781,7 +8102,8 @@ function Workspace() {
   }
 
   const visibleNav = (canManage ? NAV : NAV.filter((n) => n.id !== "admin"))
-    .filter((n) => projectId || n.id === "dashboard" || n.id === "team" || n.id === "activity" || n.id === "board");
+    .filter((n) => n.id !== "superadmin" || user.isPlatformAdmin)
+    .filter((n) => projectId || ["dashboard", "team", "activity", "board", "superadmin"].includes(n.id));
 
   return (
     <ViewerContext.Provider value={viewerContextValue}>
@@ -7986,6 +8308,9 @@ function Workspace() {
               currentProjectId={projectFilter !== "all" ? projectFilter : projectId}
               isWorkspaceManager={canManage} currentUserId={user.id}
             />
+          )}
+          {view === "superadmin" && user.isPlatformAdmin && (
+            <SuperAdminView currentUserId={user.id} onOpenWorkspace={(id) => { switchWorkspace(id); setView("dashboard"); }} />
           )}
           {view === "admin" && canManage && (
             <AdminPanelView

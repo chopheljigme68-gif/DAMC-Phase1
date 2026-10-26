@@ -14,7 +14,7 @@ const router = express.Router();
 
 router.get("/", authenticate, async (req, res, next) => {
   try {
-    res.json({ workspaces: await getWorkspacesForUser(req.user.id) });
+    res.json({ workspaces: await getWorkspacesForUser(req.user.id, { includeAll: req.user.isPlatformAdmin }) });
   } catch (err) { next(err); }
 });
 
@@ -25,7 +25,7 @@ router.post("/", authenticate, requirePlatformAdmin, async (req, res, next) => {
     const { name } = req.body || {};
     if (!name || !name.trim()) return res.status(400).json({ error: "Workspace name is required" });
     const workspaceId = await createWorkspace({ name: name.trim(), createdBy: req.user.id });
-    const workspaces = await getWorkspacesForUser(req.user.id);
+    const workspaces = await getWorkspacesForUser(req.user.id, { includeAll: req.user.isPlatformAdmin });
     res.status(201).json({ workspace: workspaces.find((w) => w.id === workspaceId), workspaces });
   } catch (err) { next(err); }
 });
