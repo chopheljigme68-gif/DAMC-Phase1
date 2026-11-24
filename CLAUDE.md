@@ -243,6 +243,16 @@ single most common deploy issue across every session. If someone reports a
 CORS error after deploying, check these two env vars first before anything
 else.
 
+## Gantt chart (`GanttView` in App.jsx)
+
+Read-only, frontend-only: derived from `tasks`, `projects` and
+`getWorkspaceMilestones`. Day maths uses the same UTC-noon day numbers as
+everywhere else (`ganttDay`); timestamps (`completedAt`) go through
+`localDateStr` first so a late-evening completion lands on the right day.
+Sticky label column and header are pure CSS (`.tfh-gantt*` in styles.css,
+theme tokens only). If you add a project/task date field, decide whether
+the bar or block should use it here.
+
 ## README.md
 
 Has a running "What's new in this round" changelog at the top of each

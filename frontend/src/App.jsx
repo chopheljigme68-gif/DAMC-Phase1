@@ -5,7 +5,7 @@ import {
   Flag, ChevronLeft, ChevronRight, Trash2, Menu,
   Bell, BadgeCheck, Sun, Moon, LogOut, AlertTriangle, Loader2, RefreshCw,
   UserPlus, ChevronDown, ChevronUp, Building2, Shield, FolderKanban, Lock,
-  FolderCheck, ArchiveRestore, Crown, KeyRound,
+  FolderCheck, ArchiveRestore, Crown, KeyRound, GanttChartSquare,
   Paperclip, FileText, Image as ImageIcon, Download, Upload, Pencil, MessageSquare, FolderOpen, Link2, Clock, ClipboardList, NotebookPen, Table as TableIcon, CheckCircle2, UserX, Repeat, CalendarRange, Monitor, Sunset,
 } from "lucide-react";
 import {
@@ -65,6 +65,8 @@ const NAV = [
   { id: "board", label: "Board", icon: SquareKanban },
   { id: "files", label: "Files", icon: FolderOpen },
   { id: "milestones", label: "Milestones", icon: Flag },
+  // Workspace-wide, so it works with no project selected (see visibleNav).
+  { id: "gantt", label: "Gantt Chart", icon: GanttChartSquare },
   { id: "team", label: "Team", icon: Users },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
   { id: "admin", label: "Admin Panel", icon: Shield },
@@ -6232,6 +6234,353 @@ const MilestoneRow = ({ milestone, projects, canManage, workspaceId, onSave, onD
  * reference links live under Files; completing a project is a drag into
  * the Completed Projects folder.
  */
+/* ------------------------------------------------------------------ */
+/* Gantt chart — every project on one timeline, its activities below    */
+/* ------------------------------------------------------------------ */
+// All date maths here is on whole calendar days, numbered from the epoch at
+// UTC noon — the same rule as the rest of the app (see dateParts): these are
+// dates, not instants, and noon keeps a timezone from shifting one by a day.
+const GANTT_DAY_MS = 86400000;
+const ganttDay = (iso) => {
+  const p = dateParts(iso);
+  return p ? Math.floor(Date.UTC(p.y, p.m - 1, p.d, 12) / GANTT_DAY_MS) : null;
+};
+const ganttIso = (day) => new Date(day * GANTT_DAY_MS).toISOString().slice(0, 10);
+// An instant (completedAt, createdAt) → the calendar day it fell on, here.
+const ganttDayOfInstant = (value) => (value ? ganttDay(localDateStr(new Date(value))) : null);
+
+// Pixels per day at each zoom. Week shows every day; Quarter fits a year on
+// a laptop screen.
+const GANTT_ZOOMS = [
+  { id: "week", label: "Week", px: 36 },
+  { id: "month", label: "Month", px: 12 },
+  { id: "quarter", label: "Quarter", px: 4 },
+];
+const GANTT_ZOOM_KEY = "pmdamc.gantt.zoom";
+const GANTT_LABEL_W = 280;
+const GANTT_PAD_DAYS = 10;
+
+const ganttStatus = (task, today) => {
+  const due = ganttDay(task.due);
+  if (task.status === "done") {
+    const doneOn = ganttDayOfInstant(task.completedAt);
+    return doneOn != null && due != null && doneOn > due
+      ? { kind: "late-done", label: `Completed ${doneOn - due} day${doneOn - due === 1 ? "" : "s"} late`, doneOn }
+      : { kind: "done", label: "Completed", doneOn };
+  }
+  if (due != null && due < today) return { kind: "overdue", label: `Overdue by ${today - due} day${today - due === 1 ? "" : "s"}` };
+  return { kind: "open", label: due === today ? "Due today" : "Open" };
+};
+
+/**
+ * One row per project: a bar from its start date to its deadline (or to the
+ * day it was completed), filled to its % done, with milestones as diamonds.
+ * A project past its deadline shows the overrun to today in red. Expand a
+ * project to see each of its activities on the day it's due — with the days
+ * it ran late drawn after it, in amber if it was finished late, in red if
+ * it's still open. Click an activity to open it.
+ *
+ * Read-only for everyone: it draws what the board, the projects and the
+ * milestones already hold, and stays live with them.
+ */
+const GanttView = ({ workspaceId, tasks, projects, users, onOpen }) => {
+  const today = ganttDay(localDateStr());
+  const [zoomId, setZoomId] = useState(() => {
+    try { return GANTT_ZOOMS.some((z) => z.id === localStorage.getItem(GANTT_ZOOM_KEY)) ? localStorage.getItem(GANTT_ZOOM_KEY) : "month"; } catch { return "month"; }
+  });
+  const zoom = GANTT_ZOOMS.find((z) => z.id === zoomId) || GANTT_ZOOMS[1];
+  const setZoom = (id) => { setZoomId(id); try { localStorage.setItem(GANTT_ZOOM_KEY, id); } catch { /* private mode */ } };
+
+  const [show, setShow] = useState("active"); // active | completed | all
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [milestones, setMilestones] = useState([]);
+  const scrollRef = useRef(null);
+
+  // Milestones are fetched (they aren't in the workspace's task list) and
+  // kept live: every milestone change broadcasts projects:changed.
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.getWorkspaceMilestones(workspaceId).then((r) => { if (alive) setMilestones(r.milestones || []); }).catch(() => {});
+    load();
+    const socket = getSocket();
+    socket?.on("projects:changed", load);
+    return () => { alive = false; socket?.off("projects:changed", load); };
+  }, [workspaceId]);
+
+  const membersById = useMemo(() => new Map((users || []).map((u) => [u.id, u])), [users]);
+
+  // Everything per project, worked out once per change of data.
+  const rows = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return (projects || [])
+      .filter((p) => (show === "all" ? true : show === "completed" ? !!p.completedAt : !p.completedAt))
+      .filter((p) => !needle || String(p.name).toLowerCase().includes(needle))
+      .map((p) => {
+        const own = (tasks || []).filter((t) => t.projectId === p.id);
+        const dated = own.filter((t) => ganttDay(t.due) != null)
+          .sort((a, b) => a.due.localeCompare(b.due) || String(a.dueTime || "").localeCompare(String(b.dueTime || "")));
+        const ms = milestones.filter((m) => m.projectId === p.id && ganttDay(m.targetDate) != null);
+        const done = own.filter((t) => t.status === "done").length;
+        // An explicit start date wins. Otherwise the project began when it was
+        // created — or earlier, if activities were scheduled before that.
+        const firstWork = dated.length ? ganttDay(dated[0].due) : null;
+        const start = ganttDay(p.startDate)
+          ?? Math.min(ganttDayOfInstant(p.createdAt) ?? today, firstWork ?? Infinity);
+        const deadline = ganttDay(p.deadline);
+        const completedOn = ganttDayOfInstant(p.completedAt);
+        const lastWork = Math.max(start, ...dated.map((t) => ganttDay(t.due)), ...ms.map((m) => ganttDay(m.targetDate)));
+        // Where the bar ends: the day it was completed; else its deadline;
+        // with no deadline, the last thing scheduled in it (or today).
+        const end = completedOn ?? deadline ?? Math.max(lastWork, today);
+        const overrun = !completedOn && deadline != null && deadline < today ? today : null;
+        return {
+          project: p, tasks: dated, undated: own.length - dated.length, milestones: ms,
+          start, end: Math.max(end, start), deadline, overrun, completedOn,
+          total: own.length, done, pct: own.length ? Math.round((done / own.length) * 100) : 0,
+          noDeadline: deadline == null && !completedOn,
+        };
+      })
+      .sort((a, b) => a.start - b.start || String(a.project.name).localeCompare(String(b.project.name)));
+  }, [projects, tasks, milestones, show, query, today]);
+
+  // The visible window: everything drawn, plus a little air either side.
+  const range = useMemo(() => {
+    const days = [today];
+    for (const r of rows) {
+      days.push(r.start, r.end);
+      if (r.overrun) days.push(r.overrun);
+      for (const t of r.tasks) { days.push(ganttDay(t.due)); const s = ganttStatus(t, today); if (s.doneOn) days.push(s.doneOn); }
+      for (const m of r.milestones) days.push(ganttDay(m.targetDate));
+    }
+    const lo = Math.min(...days) - GANTT_PAD_DAYS;
+    const hi = Math.max(...days) + GANTT_PAD_DAYS;
+    return { from: lo, to: hi, days: hi - lo + 1 };
+  }, [rows, today]);
+
+  const x = (day) => (day - range.from) * zoom.px;
+  const width = range.days * zoom.px;
+
+  // Month bands (top header) and the finer ticks (bottom header).
+  const header = useMemo(() => {
+    const months = [];
+    const ticks = [];
+    for (let d = range.from; d <= range.to; d++) {
+      const p = dateParts(ganttIso(d));
+      if (p.d === 1 || d === range.from) months.push({ day: d, label: `${MONTH_NAMES[p.m - 1]} ${p.y}` });
+      const weekend = p.weekday === 0 || p.weekday === 6;
+      if (zoom.id === "week") ticks.push({ day: d, label: String(p.d), sub: WEEKDAY_NAMES[p.weekday][0], weekend });
+      else if (zoom.id === "month" && p.weekday === 1) ticks.push({ day: d, label: String(p.d), weekend: false });
+      else if (zoom.id === "quarter" && p.d === 1) ticks.push({ day: d, label: MONTH_NAMES[p.m - 1], weekend: false });
+    }
+    return { months, ticks };
+  }, [range.from, range.to, zoom.id]);
+
+  const scrollToToday = useCallback((smooth = true) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ left: Math.max(0, x(today) - (el.clientWidth - GANTT_LABEL_W) / 2), behavior: smooth ? "smooth" : "auto" });
+  }, [range.from, zoom.px, today]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Open on today, and again when the zoom changes.
+  useEffect(() => { scrollToToday(false); }, [zoom.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const scrolledOnce = useRef(false);
+  useEffect(() => { if (!scrolledOnce.current && rows.length) { scrolledOnce.current = true; scrollToToday(false); } }, [rows.length, scrollToToday]);
+
+  const toggle = (id) => setExpanded((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const allOpen = rows.length > 0 && rows.every((r) => expanded.has(r.project.id));
+  const setAll = (open) => setExpanded(open ? new Set(rows.map((r) => r.project.id)) : new Set());
+  const counts = useMemo(() => ({
+    active: (projects || []).filter((p) => !p.completedAt).length,
+    completed: (projects || []).filter((p) => p.completedAt).length,
+    all: (projects || []).length,
+  }), [projects]);
+
+  const peopleOf = (t) => [membersById.get(t.assigneeId), t.assignee2Id && membersById.get(t.assignee2Id)].filter(Boolean);
+  const dateLabel = (day) => dayAndDate(ganttIso(day));
+
+  // The weekend stripes and today line are drawn once, behind every row.
+  const grid = (
+    <div className="tfh-gantt-gridlayer" style={{ width }} aria-hidden="true">
+      {zoom.id !== "quarter" && header.ticks.filter((t) => t.weekend).map((t) => (
+        <div key={`w${t.day}`} className="tfh-gantt-weekend" style={{ left: x(t.day), width: zoom.px }} />
+      ))}
+      {header.months.map((m) => <div key={`m${m.day}`} className="tfh-gantt-monthline" style={{ left: x(m.day) }} />)}
+      <div className="tfh-gantt-today" style={{ left: x(today) + zoom.px / 2 }} />
+    </div>
+  );
+
+  return (
+    <div className="tfh-fade-in" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div className="tfh-display" style={{ fontSize: 26, fontWeight: 600, marginBottom: 4 }}>Gantt Chart</div>
+          <div style={{ fontSize: 13.5, color: "var(--text-dim)" }}>Every project on one timeline. Open a project to see its activities.</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="tfh-project-search" style={{ width: 200, margin: 0 }}>
+            <Search size={12} color="var(--text-faint)" />
+            <input className="tfh-project-search-input" placeholder="Find a project…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Find a project" />
+          </div>
+          <div className="tfh-segmented" role="radiogroup" aria-label="Which projects" style={{ gridTemplateColumns: "repeat(3, auto)" }}>
+            {[["active", "Active"], ["completed", "Completed"], ["all", "All"]].map(([id, label]) => (
+              <button key={id} type="button" role="radio" aria-checked={show === id} className={`tfh-segment ${show === id ? "active" : ""}`} onClick={() => setShow(id)} style={{ padding: "5px 10px" }}>
+                {label} <span style={{ opacity: 0.6 }}>{counts[id]}</span>
+              </button>
+            ))}
+          </div>
+          <div className="tfh-segmented" role="radiogroup" aria-label="Zoom" style={{ gridTemplateColumns: "repeat(3, auto)" }}>
+            {GANTT_ZOOMS.map((z) => (
+              <button key={z.id} type="button" role="radio" aria-checked={zoom.id === z.id} className={`tfh-segment ${zoom.id === z.id ? "active" : ""}`} onClick={() => setZoom(z.id)} style={{ padding: "5px 10px" }}>{z.label}</button>
+            ))}
+          </div>
+          <button type="button" className="tfh-btn" onClick={() => scrollToToday()}>Today</button>
+          <button type="button" className="tfh-btn tfh-btn-ghost" onClick={() => setAll(!allOpen)} disabled={!rows.length}>
+            {allOpen ? <><ChevronUp size={13} /> Collapse all</> : <><ChevronDown size={13} /> Expand all</>}
+          </button>
+        </div>
+      </div>
+
+      <div className="tfh-gantt-legend">
+        <span><i className="tfh-gantt-key bar" /> Project (filled = % done)</span>
+        <span><i className="tfh-gantt-key overrun" /> Past deadline</span>
+        <span><i className="tfh-gantt-key diamond" /> Milestone</span>
+        <span><i className="tfh-gantt-key open" /> Activity</span>
+        <span><i className="tfh-gantt-key done" /> Completed</span>
+        <span><i className="tfh-gantt-key late" /> Finished late</span>
+        <span><i className="tfh-gantt-key overdue" /> Overdue</span>
+        <span><i className="tfh-gantt-key todayline" /> Today</span>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="tfh-card" style={{ padding: 30, textAlign: "center", fontSize: 13, color: "var(--text-dim)" }}>
+          {query.trim() ? `No project matches “${query.trim()}”.` : show === "completed" ? "No completed projects yet." : "No projects to show yet."}
+        </div>
+      ) : (
+        <div className="tfh-card tfh-gantt" ref={scrollRef} role="table" aria-label="Gantt chart of projects and activities">
+          {/* Header: the corner and the two date rows stay put while scrolling. */}
+          <div className="tfh-gantt-row tfh-gantt-head" role="row">
+            <div className="tfh-gantt-label tfh-gantt-corner" role="columnheader">Project / activity</div>
+            <div className="tfh-gantt-track" style={{ width, height: 46 }} role="columnheader">
+              {header.months.map((m, i) => {
+                // A clipped month at the edge is too narrow for its name and
+                // would overprint the next one — keep the line, drop the text.
+                const until = header.months[i + 1]?.day ?? range.to + 1;
+                const roomy = (until - m.day) * zoom.px >= 72;
+                return <div key={m.day} className="tfh-gantt-month" style={{ left: x(m.day) }} title={m.label}>{roomy ? m.label : ""}</div>;
+              })}
+              {header.ticks.map((t) => (
+                <div key={t.day} className={`tfh-gantt-tick ${t.weekend ? "weekend" : ""} ${t.day === today ? "is-today" : ""}`} style={{ left: x(t.day), width: zoom.id === "week" ? zoom.px : undefined }}>
+                  {t.label}{t.sub && <span>{t.sub}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="tfh-gantt-body">
+            {grid}
+            {rows.map((r) => {
+              const p = r.project;
+              const open = expanded.has(p.id);
+              const barEnd = r.end + 1; // bars include their last day
+              const fill = Math.min(1, r.pct / 100);
+              const late = r.overrun != null;
+              const tip = [
+                p.name,
+                `${dateLabel(r.start)} → ${r.completedOn ? `completed ${dateLabel(r.completedOn)}` : r.deadline != null ? dateLabel(r.deadline) : "no deadline set"}`,
+                `${r.done} of ${r.total} activities done (${r.pct}%)`,
+                late ? `${today - r.deadline} days past its deadline` : null,
+                p.leadName ? `Lead: ${p.leadName}` : null,
+              ].filter(Boolean).join("\n");
+              return (
+                <React.Fragment key={p.id}>
+                  <div className="tfh-gantt-row project" role="row">
+                    <div className="tfh-gantt-label" role="rowheader">
+                      <button type="button" className="tfh-gantt-toggle" onClick={() => toggle(p.id)} aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} activities of ${p.name}`}>
+                        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                      </button>
+                      <span className="tfh-gantt-dot" style={{ background: p.completedAt ? "var(--success)" : late ? "var(--pri-high)" : "var(--stage-progress)" }} />
+                      <button type="button" className="tfh-gantt-name" onClick={() => toggle(p.id)} title={p.name}>{p.name}</button>
+                      <span className="tfh-gantt-count tfh-mono">{r.done}/{r.total}</span>
+                    </div>
+                    <div className="tfh-gantt-track" style={{ width }} role="cell">
+                      <div
+                        className={`tfh-gantt-bar ${p.completedAt ? "complete" : ""} ${r.noDeadline ? "open-ended" : ""}`}
+                        style={{ left: x(r.start), width: Math.max(zoom.px, x(barEnd) - x(r.start)) }}
+                        title={tip}
+                      >
+                        <div className="tfh-gantt-fill" style={{ width: `${fill * 100}%` }} />
+                      </div>
+                      {late && (
+                        <div className="tfh-gantt-overrun" style={{ left: x(r.deadline + 1), width: Math.max(2, x(r.overrun + 1) - x(r.deadline + 1)) }} title={`${today - r.deadline} days past the deadline (${dateLabel(r.deadline)})`} />
+                      )}
+                      <span className="tfh-gantt-barlabel" style={{ left: x((late ? r.overrun : r.end) + 1) + 6 }}>
+                        {r.pct}%{r.completedOn ? " · complete" : late ? ` · ${today - r.deadline}d late` : r.noDeadline ? " · no deadline" : ""}
+                      </span>
+                      {r.milestones.map((m) => (
+                        <span
+                          key={m.id} className={`tfh-gantt-diamond ${ganttDay(m.targetDate) <= today ? "reached" : ""}`}
+                          style={{ left: x(ganttDay(m.targetDate)) + zoom.px / 2 }}
+                          title={`◆ ${m.title}\n${dayAndDate(m.targetDate)}${m.description ? `\n${m.description}` : ""}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {open && r.tasks.map((t) => {
+                    const due = ganttDay(t.due);
+                    const st = ganttStatus(t, today);
+                    const people = peopleOf(t);
+                    const tail = st.kind === "late-done" ? st.doneOn : st.kind === "overdue" ? today : null;
+                    return (
+                      <div key={t.id} className="tfh-gantt-row task" role="row">
+                        <div className="tfh-gantt-label" role="rowheader">
+                          <button type="button" className="tfh-gantt-taskname" onClick={() => onOpen(t)} title={`${t.title} — open`}>
+                            {t.title}
+                          </button>
+                          <span className="tfh-gantt-people">
+                            {people.map((m) => <Avatar key={m.id} member={m} size={18} />)}
+                          </span>
+                        </div>
+                        <div className="tfh-gantt-track" style={{ width }} role="cell">
+                          {tail != null && (
+                            <div className={`tfh-gantt-tail ${st.kind}`} style={{ left: x(due + 1), width: Math.max(2, x(tail + 1) - x(due + 1)) }} />
+                          )}
+                          <button
+                            type="button" className={`tfh-gantt-task ${st.kind}`}
+                            style={{ left: x(due), width: Math.max(8, zoom.px) }}
+                            onClick={() => onOpen(t)}
+                            title={`${t.title}\n${dayAndDate(t.due)}${t.dueTime ? `, ${formatTimeRange(t.dueTime, t.endTime)}` : ""}\n${people.map((m) => m.name).join(" & ") || "Unassigned"}\n${st.label}`}
+                            aria-label={`${t.title}, ${dayAndDate(t.due)}, ${st.label}`}
+                          />
+                          {zoom.id !== "quarter" && (
+                            <span className="tfh-gantt-tasklabel" style={{ left: x((tail ?? due) + 1) + 6 }}>{t.title}</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {open && r.tasks.length === 0 && (
+                    <div className="tfh-gantt-row task" role="row">
+                      <div className="tfh-gantt-label" role="rowheader"><span style={{ fontSize: 11.5, color: "var(--text-faint)", paddingLeft: 30 }}>No dated activities yet</span></div>
+                      <div className="tfh-gantt-track" style={{ width }} role="cell" />
+                    </div>
+                  )}
+                  {open && r.undated > 0 && (
+                    <div className="tfh-gantt-row task" role="row">
+                      <div className="tfh-gantt-label" role="rowheader"><span style={{ fontSize: 11, color: "var(--text-faint)", paddingLeft: 30 }}>+ {r.undated} without a date (not shown)</span></div>
+                      <div className="tfh-gantt-track" style={{ width }} role="cell" />
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MilestonesView = ({ workspaceId, projects, currentProjectId, isWorkspaceManager, currentUserId }) => {
   const [milestones, setMilestones] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -7768,7 +8117,7 @@ function Workspace() {
   // If there's no project (or the current one disappears), only the
   // Dashboard, Board, and Team views make sense — everything else needs a
   // specific project. Board now works without one selected (workspace-wide).
-  useEffect(() => { if (!projectId && !["dashboard", "team", "activity", "board", "superadmin"].includes(view)) setView("dashboard"); }, [projectId, view]);
+  useEffect(() => { if (!projectId && !["dashboard", "team", "activity", "board", "superadmin", "gantt"].includes(view)) setView("dashboard"); }, [projectId, view]);
   useEffect(() => { if (view === "superadmin" && !user.isPlatformAdmin) setView("dashboard"); }, [view, user.isPlatformAdmin]);
 
   // Realtime: socket listeners, scoped to the workspace currently being viewed
@@ -8103,7 +8452,7 @@ function Workspace() {
 
   const visibleNav = (canManage ? NAV : NAV.filter((n) => n.id !== "admin"))
     .filter((n) => n.id !== "superadmin" || user.isPlatformAdmin)
-    .filter((n) => projectId || ["dashboard", "team", "activity", "board", "superadmin"].includes(n.id));
+    .filter((n) => projectId || ["dashboard", "team", "activity", "board", "superadmin", "gantt"].includes(n.id));
 
   return (
     <ViewerContext.Provider value={viewerContextValue}>
@@ -8308,6 +8657,9 @@ function Workspace() {
               currentProjectId={projectFilter !== "all" ? projectFilter : projectId}
               isWorkspaceManager={canManage} currentUserId={user.id}
             />
+          )}
+          {view === "gantt" && (
+            <GanttView workspaceId={currentId} tasks={tasks} projects={projects} users={users} onOpen={openEdit} />
           )}
           {view === "superadmin" && user.isPlatformAdmin && (
             <SuperAdminView currentUserId={user.id} onOpenWorkspace={(id) => { switchWorkspace(id); setView("dashboard"); }} />

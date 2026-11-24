@@ -6,6 +6,27 @@ A real, deployable task board with proper hierarchy: **workspaces** contain
 boundary below is enforced by the server, not just hidden in the UI, and
 was tested live before being shipped.
 
+## What's new in this round — Gantt chart
+
+- **New "Gantt Chart" page** in the sidebar (under Milestones), available
+  with or without a project selected. Every project is one bar on a shared
+  timeline: from its start date to its deadline (or the day it was
+  completed), filled in proportion to activities done.
+  - Past-deadline projects get a red hatched overrun up to today, labelled
+    "N days late". Projects with no deadline end at their last scheduled
+    activity and are labelled "no deadline".
+  - Milestones sit on the bar as diamonds (filled once the date has passed).
+  - Expand a project to see its activities on their due dates: blue = open,
+    green = completed, green+amber tail = finished late (tail runs to the
+    day it was actually done), red with a dashed tail to today = overdue.
+    Activities with no due date are counted, not drawn. Click any activity
+    to open it.
+  - Week / Month / Quarter zoom (remembered per browser), Active /
+    Completed / All filter, project search, Today button, Expand/Collapse all.
+- **Frontend only** — no backend change, no migration. Built from the task,
+  project and milestone data the app already loads, and refreshes live when
+  milestones change.
+
 ## What's new in this round — mark logged activities complete or pending
 
 - **Every activity in the Collaboration Log can be marked Complete or
